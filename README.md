@@ -1,6 +1,6 @@
-# Forge Hello World
+# Jira Custom UI with Forge
 
-This project contains a Forge app written in Javascript that displays `Hello World!` in a Jira issue panel. 
+This project contains a Forge app written in Javascript in a Jira 
 
 See [developer.atlassian.com/platform/forge/](https://developer.atlassian.com/platform/forge) for documentation and tutorials explaining Forge.
 
