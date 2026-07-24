@@ -1,0 +1,36 @@
+permissions:
+  scopes:
+    - read:jira-work
+    - write:jira-work
+modules: 
+      
+  jira:issueActivity:
+    - key: subtask-recommendation-activity
+      resource: main
+      resolver:
+        function: resolver-fn
+      title: Sub-Task Recommendations
+      icon: https://developer.atlassian.com/platform/forge/images/issue-panel-icon.svg  
+  
+  jira:projectPage:
+    - key: squad-reporting-page
+      resource: main
+      resolver:
+        function: resolver-fn
+      title: Squad Progress Report
+      icon: https://developer.atlassian.com/platform/forge/images/icons/issue-activity.svg
+
+  function:
+    - key: resolver-fn
+      handler: index.handler
+
+resources:
+  - key: main
+    path: frontend/build
+    tunnel:
+      port: 3000
+
+app:
+  id: ari:cloud:ecosystem::app/9d57a998-a8b0-427d-94ee-3c7f1e001249
+  runtime:
+    name: nodejs22.x
