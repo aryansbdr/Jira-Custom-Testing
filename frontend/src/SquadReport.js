@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import * as XLSX from 'xlsx'; // 👈 1. Import library XLSX
+import * as XLSX from 'xlsx';
 import {
   BarChart,
   Bar,
@@ -8,25 +8,31 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
-  ResponsiveContainer
+  ResponsiveContainer,
+  Cell
 } from 'recharts';
 
 // ==========================================================
-// MOCK DATA (Data Report)
+// MOCK DATA (Data Report dengan Ringkasan Total Status)
 // ==========================================================
 const MOCK_PARENT_ISSUES = [
   {
     key: 'SCRUM-1',
     title: 'Task 1 (SCRUM-1)',
-    squadChartData: [
-      { name: 'Backend', todo: 1, inProgress: 0, done: 0 },
-      { name: 'Frontend', todo: 2, inProgress: 0, done: 0 }
+    // Ringkasan Total Sub-Task Akumulasi (Tampilan 'Squad / Semua Role')
+    squadSummaryData: [
+      { status: 'To Do', count: 3, color: '#4C6B1F' },
+      { status: 'In Progress', count: 1, color: '#0052CC' },
+      { status: 'Done', count: 2, color: '#36B37E' }
     ],
+    // Data per Member (Tampilan saat filter Frontend / Backend / QA)
     memberChartData: {
-      Backend: [{ name: 'Budi (Backend)', todo: 1, inProgress: 0, done: 0 }],
+      Backend: [
+        { name: 'Budi (Backend)', todo: 1, inProgress: 1, done: 0 }
+      ],
       Frontend: [
-        { name: 'Siti (Frontend)', todo: 1, inProgress: 0, done: 0 },
-        { name: 'Rian (Frontend)', todo: 1, inProgress: 0, done: 0 }
+        { name: 'Siti (Frontend)', todo: 1, inProgress: 0, done: 1 },
+        { name: 'Rian (Frontend)', todo: 1, inProgress: 0, done: 1 }
       ],
       QA: []
     }
@@ -34,10 +40,10 @@ const MOCK_PARENT_ISSUES = [
   {
     key: 'SCRUM-2',
     title: 'Task 2 (SCRUM-2)',
-    squadChartData: [
-      { name: 'Backend', todo: 5, inProgress: 2, done: 1 },
-      { name: 'Frontend', todo: 6, inProgress: 1, done: 2 },
-      { name: 'QA', todo: 2, inProgress: 0, done: 0 }
+    squadSummaryData: [
+      { status: 'To Do', count: 13, color: '#4C6B1F' },
+      { status: 'In Progress', count: 3, color: '#0052CC' },
+      { status: 'Done', count: 3, color: '#36B37E' }
     ],
     memberChartData: {
       Backend: [
@@ -48,17 +54,23 @@ const MOCK_PARENT_ISSUES = [
         { name: 'Siti (Frontend)', todo: 4, inProgress: 1, done: 1 },
         { name: 'Rian (Frontend)', todo: 2, inProgress: 0, done: 1 }
       ],
-      QA: [{ name: 'Dewi (QA)', todo: 2, inProgress: 0, done: 0 }]
+      QA: [
+        { name: 'Dewi (QA)', todo: 2, inProgress: 0, done: 0 }
+      ]
     }
   },
   {
     key: 'SCRUM-26',
     title: 'Team 3 (SCRUM-26)',
-    squadChartData: [
-      { name: 'Backend', todo: 1, inProgress: 1, done: 0 }
+    squadSummaryData: [
+      { status: 'To Do', count: 1, color: '#4C6B1F' },
+      { status: 'In Progress', count: 1, color: '#0052CC' },
+      { status: 'Done', count: 0, color: '#36B37E' }
     ],
     memberChartData: {
-      Backend: [{ name: 'Andi (Backend)', todo: 1, inProgress: 1, done: 0 }],
+      Backend: [
+        { name: 'Andi (Backend)', todo: 1, inProgress: 1, done: 0 }
+      ],
       Frontend: [],
       QA: []
     }
@@ -75,33 +87,34 @@ export function SquadReport() {
     }));
   };
 
-  // 👈 2. FUNGSI UNTUK EXPORT DATA KE EXCEL
+  // FUNGSI EXPORT DATA KE EXCEL
   const exportToExcel = () => {
     const formattedRows = [];
 
-    // Merapikan data agar menjadi baris-baris tabel Excel yang rapi
     MOCK_PARENT_ISSUES.forEach((issue) => {
       const currentFilter = filters[issue.key] || 'Squad';
 
       if (currentFilter === 'Squad') {
-        issue.squadChartData.forEach((sq) => {
-          formattedRows.push({
-            'Parent Issue': issue.title,
-            'Tipe View': 'Squad Summary',
-            'Squad / Nama Member': sq.name,
-            'To Do': sq.todo,
-            'In Progress': sq.inProgress,
-            'Done': sq.done,
-            'Total Sub-Task': sq.todo + sq.inProgress + sq.done
-          });
+        const todoCount = issue.squadSummaryData.find((s) => s.status === 'To Do')?.count || 0;
+        const inProgressCount = issue.squadSummaryData.find((s) => s.status === 'In Progress')?.count || 0;
+        const doneCount = issue.squadSummaryData.find((s) => s.status === 'Done')?.count || 0;
+
+        formattedRows.push({
+          'Parent Issue': issue.title,
+          'Tipe View': 'Squad (Semua Role)',
+          'Nama / Kategori': 'Total Akumulasi Task',
+          'To Do': todoCount,
+          'In Progress': inProgressCount,
+          'Done': doneCount,
+          'Total Sub-Task': todoCount + inProgressCount + doneCount
         });
       } else {
         const members = issue.memberChartData[currentFilter] || [];
         members.forEach((mem) => {
           formattedRows.push({
             'Parent Issue': issue.title,
-            'Tipe View': `Member Filter (${currentFilter})`,
-            'Squad / Nama Member': mem.name,
+            'Tipe View': `Member (${currentFilter})`,
+            'Nama / Kategori': mem.name,
             'To Do': mem.todo,
             'In Progress': mem.inProgress,
             'Done': mem.done,
@@ -111,15 +124,11 @@ export function SquadReport() {
       }
     });
 
-    // Buat Worksheet & Workbook
     const worksheet = XLSX.utils.json_to_sheet(formattedRows);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Squad Progress');
 
-    // Generate tanggal untuk nama file
     const dateStr = new Date().toISOString().split('T')[0];
-    
-    // Download File Excel
     XLSX.writeFile(workbook, `Squad_Progress_Report_${dateStr}.xlsx`);
   };
 
@@ -135,17 +144,16 @@ export function SquadReport() {
         }}
       >
         <div>
-          <h2 style={{ margin: 0 }}> Reporting Progress Sub-Tasks Project</h2>
+          <h2 style={{ margin: 0 }}>📊 Reporting Progress Sub-Tasks Project</h2>
           <p style={{ color: '#6B778C', margin: '4px 0 0 0' }}>
             Data grafik berasal dari seluruh Sub-Task hasil validasi pada setiap Story/Task.
           </p>
         </div>
 
-        {/* 👈 3. TOMBOL EXPORT EXCEL */}
         <button
           onClick={exportToExcel}
           style={{
-            backgroundColor: '#217346', // Warna Hijau khas Excel
+            backgroundColor: '#217346',
             color: '#FFFFFF',
             border: 'none',
             borderRadius: '4px',
@@ -159,7 +167,7 @@ export function SquadReport() {
             boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
           }}
         >
-           Export to Excel (.xlsx)
+          📥 Export to Excel (.xlsx)
         </button>
       </div>
 
@@ -167,10 +175,8 @@ export function SquadReport() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
         {MOCK_PARENT_ISSUES.map((issue) => {
           const currentFilter = filters[issue.key] || 'Squad';
-          const chartData =
-            currentFilter === 'Squad'
-              ? issue.squadChartData
-              : issue.memberChartData[currentFilter] || [];
+          const isSquadView = currentFilter === 'Squad';
+          const memberData = issue.memberChartData[currentFilter] || [];
 
           return (
             <div
@@ -183,6 +189,7 @@ export function SquadReport() {
                 boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
               }}
             >
+              {/* HEADER CARD & FILTER */}
               <div
                 style={{
                   display: 'flex',
@@ -194,7 +201,7 @@ export function SquadReport() {
                 }}
               >
                 <h4 style={{ margin: 0, color: '#091E42', fontSize: '16px' }}>
-                   {issue.title}
+                  📌 {issue.title}
                 </h4>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -226,7 +233,8 @@ export function SquadReport() {
                 </div>
               </div>
 
-              {chartData.length === 0 ? (
+              {/* RENDER DIAGRAM */}
+              {!isSquadView && memberData.length === 0 ? (
                 <div
                   style={{
                     padding: '24px',
@@ -241,16 +249,32 @@ export function SquadReport() {
               ) : (
                 <div style={{ width: '100%', height: 250 }}>
                   <ResponsiveContainer>
-                    <BarChart data={chartData}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="name" />
-                      <YAxis allowDecimals={false} />
-                      <Tooltip />
-                      <Legend />
-                      <Bar dataKey="todo" name="To Do" fill="#4C6B1F" />
-                      <Bar dataKey="inProgress" name="In Progress" fill="#0052CC" />
-                      <Bar dataKey="done" name="Done" fill="#36B37E" />
-                    </BarChart>
+                    {isSquadView ? (
+                      /* TAMPILAN SQUAD (SEMUA ROLE): TOTAL TO DO, IN PROGRESS, DONE */
+                      <BarChart data={issue.squadSummaryData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="status" />
+                        <YAxis allowDecimals={false} />
+                        <Tooltip />
+                        <Bar dataKey="count" name="Jumlah Sub-Task" radius={[4, 4, 0, 0]}>
+                          {issue.squadSummaryData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.color} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    ) : (
+                      /* TAMPILAN FILTER PER ROLE (FRONTEND/BACKEND/QA) PER MEMBER */
+                      <BarChart data={memberData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="name" />
+                        <YAxis allowDecimals={false} />
+                        <Tooltip />
+                        <Legend />
+                        <Bar dataKey="todo" name="To Do" fill="#4C6B1F" />
+                        <Bar dataKey="inProgress" name="In Progress" fill="#0052CC" />
+                        <Bar dataKey="done" name="Done" fill="#36B37E" />
+                      </BarChart>
+                    )}
                   </ResponsiveContainer>
                 </div>
               )}
