@@ -11,12 +11,16 @@ function App() {
   const [statusMsg, setStatusMsg] = useState('');
 
   useEffect(() => {
+    if (view && view.theme) {
+      view.theme.enable();
+    }
+
     view.getContext().then((context) => {
       if (context) {
         const isProjectView =
           context.moduleKey === 'squad-report-page' ||
           context.extension?.type === 'jira:projectPage' ||
-          !context.extension?.issue; 
+          !context.extension?.issue;
 
         if (isProjectView) {
           setIsReportPage(true);
@@ -47,16 +51,10 @@ function App() {
     });
   }, []);
 
-  // =========================================================================
-  // SQUAD PROGRESS REPORT 
-  // =========================================================================
   if (isReportPage) {
     return <SquadReport />;
   }
 
-  // =========================================================================
-  // REKOMENDASI SUB-TASK 
-  // =========================================================================
   const totalTasks = groups.reduce((acc, group) => acc + (group.tasks?.length || 0), 0);
 
   const handleRemoveTask = (groupIndex, taskId) => {
@@ -133,9 +131,17 @@ function App() {
   };
 
   return (
-    <div style={{ position: 'relative', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', padding: '12px', color: '#172B4D', minHeight: '180px' }}>
-      
-      {/* LOADING SCREEN OVERLAY */}
+    <div
+      style={{
+        position: 'relative',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        padding: '12px',
+        color: 'var(--ds-text, #172B4D)',
+        backgroundColor: 'var(--ds-surface, transparent)',
+        minHeight: '180px',
+      }}
+    >
+      {/* LOADING OVERLAY */}
       {loading && (
         <div
           style={{
@@ -144,7 +150,7 @@ function App() {
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: 'rgba(255, 255, 255, 0.88)',
+            backgroundColor: 'var(--ds-surface-overlay, rgba(255, 255, 255, 0.88))',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
@@ -158,13 +164,13 @@ function App() {
             style={{
               width: '32px',
               height: '32px',
-              border: '4px solid #DFE1E6',
-              borderTop: '4px solid #0052CC',
+              border: '4px solid var(--ds-border, #DFE1E6)',
+              borderTop: '4px solid var(--ds-background-brand-bold, #0052CC)',
               borderRadius: '50%',
               animation: 'spin 0.8s linear infinite',
             }}
           />
-          <p style={{ marginTop: '12px', fontSize: '13px', fontWeight: 600, color: '#0052CC' }}>
+          <p style={{ marginTop: '12px', fontSize: '13px', fontWeight: 600, color: 'var(--ds-text-brand, #0052CC)' }}>
             {loadingText}
           </p>
           <style>{`
@@ -178,13 +184,22 @@ function App() {
 
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: '13px', color: '#5E6C84' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: '13px', color: 'var(--ds-text-subtle, #5E6C84)' }}>
           <span>RECOMMENDED SUB TASKS ({totalTasks})</span>
         </div>
       </div>
 
       {statusMsg && (
-        <div style={{ padding: '6px 10px', backgroundColor: '#E3FCEF', color: '#006644', borderRadius: '3px', fontSize: '12px', marginBottom: '12px' }}>
+        <div
+          style={{
+            padding: '6px 10px',
+            backgroundColor: 'var(--ds-background-success, #E3FCEF)',
+            color: 'var(--ds-text-success, #006644)',
+            borderRadius: '3px',
+            fontSize: '12px',
+            marginBottom: '12px',
+          }}
+        >
           {statusMsg}
         </div>
       )}
@@ -197,15 +212,23 @@ function App() {
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              backgroundColor: '#F4F5F7',
+              backgroundColor: 'var(--ds-background-neutral, #F4F5F7)',
               padding: '6px 12px',
               borderRadius: '3px',
               marginBottom: '8px',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontWeight: 700, fontSize: '12px', color: '#172B4D' }}>{group.category}</span>
-              <span style={{ fontSize: '11px', color: '#5E6C84', backgroundColor: '#EBECF0', padding: '2px 6px', borderRadius: '3px' }}>
+              <span style={{ fontWeight: 700, fontSize: '12px', color: 'var(--ds-text, #172B4D)' }}>{group.category}</span>
+              <span
+                style={{
+                  fontSize: '11px',
+                  color: 'var(--ds-text-subtle, #5E6C84)',
+                  backgroundColor: 'var(--ds-background-neutral-subtle, #EBECF0)',
+                  padding: '2px 6px',
+                  borderRadius: '3px',
+                }}
+              >
                 {group.tasks ? group.tasks.length : 0} task
               </span>
             </div>
@@ -215,8 +238,11 @@ function App() {
               onClick={() => handleAddAllCategory(groupIdx)}
               style={{
                 border: 'none',
-                backgroundColor: loading || !group.tasks || group.tasks.length === 0 ? '#C1C7D0' : '#0052CC',
-                color: '#FFFFFF',
+                backgroundColor:
+                  loading || !group.tasks || group.tasks.length === 0
+                    ? 'var(--ds-background-disabled, #C1C7D0)'
+                    : 'var(--ds-background-brand-bold, #0052CC)',
+                color: 'var(--ds-text-on-bold, #FFFFFF)',
                 fontSize: '11px',
                 fontWeight: 600,
                 padding: '4px 8px',
@@ -230,7 +256,7 @@ function App() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingLeft: '4px' }}>
             {!group.tasks || group.tasks.length === 0 ? (
-              <span style={{ fontSize: '11px', color: '#00875A', fontStyle: 'italic', paddingLeft: '8px' }}>
+              <span style={{ fontSize: '11px', color: 'var(--ds-text-success, #00875A)', fontStyle: 'italic', paddingLeft: '8px' }}>
                 Semua rekomendasi {group.category} sudah ditambahkan!
               </span>
             ) : (
@@ -239,20 +265,20 @@ function App() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <span
                       onClick={() => handleRemoveTask(groupIdx, task.id)}
-                      style={{ color: '#DE350B', cursor: 'pointer', fontWeight: 'bold', fontSize: '14px', width: '12px' }}
+                      style={{ color: 'var(--ds-text-danger, #DE350B)', cursor: 'pointer', fontWeight: 'bold', fontSize: '14px', width: '12px' }}
                       title="Abaikan rekomendasi ini"
                     >
                       ✕
                     </span>
-                    <span style={{ color: '#172B4D' }}>{task.text}</span>
+                    <span style={{ color: 'var(--ds-text, #172B4D)' }}>{task.text}</span>
                   </div>
                   <button
                     disabled={loading}
                     onClick={() => handleAddSingle(groupIdx, task)}
                     style={{
                       border: 'none',
-                      backgroundColor: '#DFE1E6',
-                      color: '#42526E',
+                      backgroundColor: 'var(--ds-background-neutral, #DFE1E6)',
+                      color: 'var(--ds-text, #42526E)',
                       fontSize: '10px',
                       fontWeight: 600,
                       padding: '2px 6px',

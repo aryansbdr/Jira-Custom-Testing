@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
+import { view } from '@forge/bridge';
 import {
   BarChart,
   Bar,
@@ -19,13 +20,11 @@ const MOCK_PARENT_ISSUES = [
   {
     key: 'SCRUM-1',
     title: 'Task 1 (SCRUM-1)',
-    // Ringkasan Total Sub-Task Akumulasi (Tampilan 'Squad / Semua Role')
     squadSummaryData: [
       { status: 'To Do', count: 3, color: '#4C6B1F' },
       { status: 'In Progress', count: 1, color: '#0052CC' },
       { status: 'Done', count: 2, color: '#36B37E' }
     ],
-    // Data per Member (Tampilan saat filter Frontend / Backend / QA)
     memberChartData: {
       Backend: [
         { name: 'Budi (Backend)', todo: 1, inProgress: 1, done: 0 }
@@ -78,6 +77,12 @@ const MOCK_PARENT_ISSUES = [
 ];
 
 export function SquadReport() {
+  useEffect(() => {
+    if (view && view.theme) {
+      view.theme.enable();
+    }
+  }, []);
+
   const [filters, setFilters] = useState({});
 
   const handleFilterChange = (issueKey, value) => {
@@ -87,7 +92,6 @@ export function SquadReport() {
     }));
   };
 
-  // FUNGSI EXPORT DATA KE EXCEL
   const exportToExcel = () => {
     const formattedRows = [];
 
@@ -133,7 +137,15 @@ export function SquadReport() {
   };
 
   return (
-    <div style={{ padding: '24px', fontFamily: 'sans-serif', backgroundColor: '#FFFFFF' }}>
+    <div
+      style={{
+        padding: '24px',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        backgroundColor: 'var(--ds-surface, transparent)',
+        color: 'var(--ds-text, #172B4D)',
+        minHeight: '100vh'
+      }}
+    >
       {/* HEADER SECTION DENGAN TOMBOL EXPORT */}
       <div
         style={{
@@ -144,8 +156,10 @@ export function SquadReport() {
         }}
       >
         <div>
-          <h2 style={{ margin: 0 }}>📊 Reporting Progress Sub-Tasks Project</h2>
-          <p style={{ color: '#6B778C', margin: '4px 0 0 0' }}>
+          <h2 style={{ margin: 0, color: 'var(--ds-text, #172B4D)' }}>
+            📊 Reporting Progress Sub-Tasks Project
+          </h2>
+          <p style={{ color: 'var(--ds-text-subtle, #6B778C)', margin: '4px 0 0 0' }}>
             Data grafik berasal dari seluruh Sub-Task hasil validasi pada setiap Story/Task.
           </p>
         </div>
@@ -182,10 +196,10 @@ export function SquadReport() {
             <div
               key={issue.key}
               style={{
-                border: '1px solid #C1C7D0',
+                border: '1px solid var(--ds-border, #C1C7D0)',
                 borderRadius: '8px',
                 padding: '20px',
-                backgroundColor: '#FAFBFC',
+                backgroundColor: 'var(--ds-surface-raised, var(--ds-background-neutral, #FAFBFC))',
                 boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
               }}
             >
@@ -196,18 +210,18 @@ export function SquadReport() {
                   justifyContent: 'space-between',
                   alignItems: 'center',
                   marginBottom: '16px',
-                  borderBottom: '1px solid #DFE1E6',
+                  borderBottom: '1px solid var(--ds-border, #DFE1E6)',
                   paddingBottom: '12px'
                 }}
               >
-                <h4 style={{ margin: 0, color: '#091E42', fontSize: '16px' }}>
+                <h4 style={{ margin: 0, color: 'var(--ds-text, #091E42)', fontSize: '16px' }}>
                   📌 {issue.title}
                 </h4>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <label
                     htmlFor={`filter-${issue.key}`}
-                    style={{ fontSize: '13px', fontWeight: 'bold', color: '#42526E' }}
+                    style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--ds-text-subtle, #42526E)' }}
                   >
                     Filter View:
                   </label>
@@ -218,10 +232,11 @@ export function SquadReport() {
                     style={{
                       padding: '6px 12px',
                       borderRadius: '4px',
-                      border: '1px solid #A5ADBA',
+                      border: '1px solid var(--ds-border, #A5ADBA)',
                       fontSize: '13px',
                       cursor: 'pointer',
-                      backgroundColor: '#FFFFFF',
+                      backgroundColor: 'var(--ds-surface-overlay, #FFFFFF)',
+                      color: 'var(--ds-text, #172B4D)',
                       fontWeight: '500'
                     }}
                   >
@@ -239,23 +254,28 @@ export function SquadReport() {
                   style={{
                     padding: '24px',
                     textAlign: 'center',
-                    color: '#6B778C',
-                    backgroundColor: '#F4F5F7',
+                    color: 'var(--ds-text-subtle, #6B778C)',
+                    backgroundColor: 'var(--ds-background-neutral, #F4F5F7)',
                     borderRadius: '4px'
                   }}
                 >
                   Tidak ada sub-task / anggota pada filter <strong>{currentFilter}</strong> untuk task ini.
                 </div>
               ) : (
-                <div style={{ width: '100%', height: 250 }}>
-                  <ResponsiveContainer>
+                <div style={{ width: '100%', height: 250, minWidth: 0 }}>
+                  <ResponsiveContainer width="100%" height="100%">
                     {isSquadView ? (
-                      /* TAMPILAN SQUAD (SEMUA ROLE): TOTAL TO DO, IN PROGRESS, DONE */
                       <BarChart data={issue.squadSummaryData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="status" />
-                        <YAxis allowDecimals={false} />
-                        <Tooltip />
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--ds-border, #DFE1E6)" />
+                        <XAxis dataKey="status" stroke="var(--ds-text, #172B4D)" />
+                        <YAxis allowDecimals={false} stroke="var(--ds-text, #172B4D)" />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: 'var(--ds-surface-overlay, #FFFFFF)',
+                            borderColor: 'var(--ds-border, #DFE1E6)',
+                            color: 'var(--ds-text, #172B4D)'
+                          }}
+                        />
                         <Bar dataKey="count" name="Jumlah Sub-Task" radius={[4, 4, 0, 0]}>
                           {issue.squadSummaryData.map((entry, index) => (
                             <Cell key={`cell-${index}`} fill={entry.color} />
@@ -263,13 +283,18 @@ export function SquadReport() {
                         </Bar>
                       </BarChart>
                     ) : (
-                      /* TAMPILAN FILTER PER ROLE (FRONTEND/BACKEND/QA) PER MEMBER */
                       <BarChart data={memberData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="name" />
-                        <YAxis allowDecimals={false} />
-                        <Tooltip />
-                        <Legend />
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--ds-border, #DFE1E6)" />
+                        <XAxis dataKey="name" stroke="var(--ds-text, #172B4D)" />
+                        <YAxis allowDecimals={false} stroke="var(--ds-text, #172B4D)" />
+                        <Tooltip
+                          contentStyle={{
+                            backgroundColor: 'var(--ds-surface-overlay, #FFFFFF)',
+                            borderColor: 'var(--ds-border, #DFE1E6)',
+                            color: 'var(--ds-text, #172B4D)'
+                          }}
+                        />
+                        <Legend wrapperStyle={{ color: 'var(--ds-text, #172B4D)' }} />
                         <Bar dataKey="todo" name="To Do" fill="#4C6B1F" />
                         <Bar dataKey="inProgress" name="In Progress" fill="#0052CC" />
                         <Bar dataKey="done" name="Done" fill="#36B37E" />
