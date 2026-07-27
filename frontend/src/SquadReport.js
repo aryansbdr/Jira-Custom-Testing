@@ -21,9 +21,9 @@ const MOCK_PARENT_ISSUES = [
     key: 'SCRUM-1',
     title: 'Task 1 (SCRUM-1)',
     squadSummaryData: [
-      { status: 'To Do', count: 3, color: '#4C6B1F' },
+      { status: 'To Do', count: 3, color: '#61635e' },
       { status: 'In Progress', count: 1, color: '#0052CC' },
-      { status: 'Done', count: 2, color: '#36B37E' }
+      { status: 'Done', count: 2, color: '#095d17' }
     ],
     memberChartData: {
       Backend: [
@@ -40,9 +40,9 @@ const MOCK_PARENT_ISSUES = [
     key: 'SCRUM-2',
     title: 'Task 2 (SCRUM-2)',
     squadSummaryData: [
-      { status: 'To Do', count: 13, color: '#4C6B1F' },
+      { status: 'To Do', count: 13, color: '#61635e' },
       { status: 'In Progress', count: 3, color: '#0052CC' },
-      { status: 'Done', count: 3, color: '#36B37E' }
+      { status: 'Done', count: 3, color: '#095d17' }
     ],
     memberChartData: {
       Backend: [
@@ -62,9 +62,9 @@ const MOCK_PARENT_ISSUES = [
     key: 'SCRUM-26',
     title: 'Team 3 (SCRUM-26)',
     squadSummaryData: [
-      { status: 'To Do', count: 1, color: '#4C6B1F' },
+      { status: 'To Do', count: 1, color: '#61635e' },
       { status: 'In Progress', count: 1, color: '#0052CC' },
-      { status: 'Done', count: 0, color: '#36B37E' }
+      { status: 'Done', count: 0, color: '#095d17' }
     ],
     memberChartData: {
       Backend: [
@@ -157,7 +157,7 @@ export function SquadReport() {
       >
         <div>
           <h2 style={{ margin: 0, color: 'var(--ds-text, #172B4D)' }}>
-            📊 Reporting Progress Sub-Tasks Project
+            Reporting Progress Sub-Tasks Project
           </h2>
           <p style={{ color: 'var(--ds-text-subtle, #6B778C)', margin: '4px 0 0 0' }}>
             Data grafik berasal dari seluruh Sub-Task hasil validasi pada setiap Story/Task.
@@ -181,7 +181,7 @@ export function SquadReport() {
             boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
           }}
         >
-          📥 Export to Excel (.xlsx)
+          Export to Excel (.xlsx)
         </button>
       </div>
 
@@ -273,8 +273,16 @@ export function SquadReport() {
                           contentStyle={{
                             backgroundColor: 'var(--ds-surface-overlay, #FFFFFF)',
                             borderColor: 'var(--ds-border, #DFE1E6)',
-                            color: 'var(--ds-text, #172B4D)'
+                            borderRadius: '6px',
+                            boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
                           }}
+                          labelStyle={{
+                            color: '#606265',                      
+                            fontWeight: 'bold'
+                          }}
+                          itemStyle={{
+                            color: '#5f6268' 
+                          }}                       
                         />
                         <Bar dataKey="count" name="Jumlah Sub-Task" radius={[4, 4, 0, 0]}>
                           {issue.squadSummaryData.map((entry, index) => (
@@ -291,7 +299,14 @@ export function SquadReport() {
                           contentStyle={{
                             backgroundColor: 'var(--ds-surface-overlay, #FFFFFF)',
                             borderColor: 'var(--ds-border, #DFE1E6)',
-                            color: 'var(--ds-text, #172B4D)'
+                            borderRadius: '6px'
+                          }}
+                          labelStyle={{
+                            color: '#989da5',
+                            fontWeight: 'bold'
+                          }}
+                          itemStyle={{
+                            color: '#69707b'
                           }}
                         />
                         <Legend wrapperStyle={{ color: 'var(--ds-text, #172B4D)' }} />
