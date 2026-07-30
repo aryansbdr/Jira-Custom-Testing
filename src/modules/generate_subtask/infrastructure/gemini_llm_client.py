@@ -42,48 +42,76 @@ class GeminiLlmClient(ILlmClient):
         description: str,
         parent_sp: float,
         examples: List[Dict[str, Any]],
+        db_patterns: Dict[str, Any] = None,
+        mode: str = "free",
+        max_subtasks: int = None,
     ) -> List[Subtask]:
         if not settings.GEMINI_API_KEY:
             raise ValueError("GEMINI_API_KEY is not configured.")
 
-        # Streamlined high-performance prompt with BRI naming conventions
+        # Strict AC Vocabulary prompt for BRI Scrum Master subtask decomposition
         prompt = (
-            "You are an expert Agile Scrum Master for BRI Bank project. Break down the new User Story into subtasks strictly mimicking the Historical References and Acceptance Criteria (AC).\n\n"
-            "STRICT BRI NAMING PATTERN CONVENTIONS:\n"
-            "1. Allowed Roles: ONLY 'backend', 'frontend' (uses WEB prefix), or 'mobile'.\n"
-            "2. Frontend (WEB) Naming Style:\n"
-            "   - 'WEB - Creating <component_name> component' (e.g. 'WEB - Creating pencarian nasabah component')\n"
-            "   - 'WEB - Handling <feature_name> with API' (e.g. 'WEB - Handling pencarian nasabah with API')\n"
-            "   - 'WEB - Creating pagination for <component_name>'\n"
-            "3. Backend (BE) Naming Style:\n"
-            "   - 'BE - Create Endpoint <ServiceName>' (e.g. 'BE - Create Endpoint InquiryListDataDebiturKorporasi')\n"
-            "   - 'BE - Enhance /<endpoint_path>' (e.g. 'BE - Enhance /mcseksternal/inquiryVcfByCif')\n"
-            "   - 'BE - Sync <sync_job_name>'\n"
-            "4. If Description contains a 'Todo:' block, extract those items first as foundational subtasks.\n"
-            "5. Subtask Story Points MUST choose from Fibonacci numbers: 0, 0.5, 1, 2, 3, 5, 8, 13.\n\n"
+            "BRI Scrum Master: Decompose User Story into subtasks strictly following the AC content.\n\n"
+            "STRICT RULES:\n"
+            "1. Prefixes: BE -, WEB -, Mobile -\n"
+            "2. DO NOT invent specific endpoint paths (e.g. '/v1/createXxx'), service class names, or migration scripts unless those exact terms are explicitly written in the AC. NEVER use URL-style paths in subtask names. Use the AC's exact wording for BE tasks.\n"
+            "3. Use the exact feature names, table names, and wording from the AC.\n"
+            "4. Banned words in summary: Ensure/Handle/Verify/Validate/Make sure/Check that/schema\n"
+            "5. SP: Fibonacci numbers only (0, 0.5, 1, 2, 3, 5, 8, 13)\n"
+            "6. No generic review tasks (e.g. 'Review code')\n"
+            "7. BE TASKS: If AC mentions backend services/functions → use the AC's exact wording (e.g. AC says 'Create service insert/update data proyek' → subtask is 'BE - Create service insert update data proyek'). If AC has NO BE detail → generate exactly 1 subtask: 'BE - Design Spec API for <story_name>'. NEVER invent endpoint paths, migration scripts, or class names not in the AC.\n"
+            "8. SMART CONSOLIDATION: Group items by LOGICAL section, NOT by AC bullet points. Rules:\n"
+            "   - All fields/inputs that belong to the SAME logical section or form → 1 subtask. E.g., all date, currency, payment method, and value fields within a 'Project Details' form → 'WEB - Create Project Details section'\n"
+            "   - Each distinct popup/modal → 1 subtask\n"
+            "   - Each standalone section (KUBL, TKBI, Approver, etc.) → 1 subtask\n"
+            "   - Action buttons of the same page → 1 subtask\n"
+            "   - NEVER create a subtask per individual field, date input, dropdown, or radio button.\n\n"
         )
+
+        # Inject real naming patterns from DB (dynamic, no hard-coding)
+        if db_patterns and (db_patterns.get("be") or db_patterns.get("web")):
+            prompt += "STYLE PATTERNS FROM YOUR PROJECT:\n"
+            if db_patterns.get("be"):
+                prompt += "BE: " + " | ".join(db_patterns["be"]) + "\n"
+            if db_patterns.get("web"):
+                prompt += "WEB: " + " | ".join(db_patterns["web"]) + "\n"
+            prompt += "\n"
+        else:
+            prompt += "BE: 'BE - Enhance X' | 'BE - Add X' | 'BE - Create X'\nWEB: 'WEB - Create component X' | 'WEB - Create Page X' | 'WEB - Mapping data X'\n\n"
 
         if examples:
-            prompt += "### HISTORICAL REFERENCES (Mimic Style & Scope):\n"
-            for i, eg in enumerate(examples):
-                prompt += f"\n--- Reference {i + 1} ---\n"
-                prompt += f"Parent Title: {eg['summary']}\n"
-                prompt += f"Parent SP: {eg['story_points']}\n"
-                prompt += f"Parent AC:\n{eg['description']}\n"
-                prompt += "Subtasks:\n"
-                for sub in eg["subtasks"]:
-                    prompt += f" - [Role: {sub['role']}] {sub['summary']} ({sub['story_points']} SP)\n"
-            prompt += "\n=====================================\n\n"
+            prompt += "REFERENCES (style only):\n"
+            for eg in examples:
+                ac_snippet = str(eg.get("description", ""))[:300]
+                prompt += f"[{eg['summary']}] AC: {ac_snippet}\nSubtasks: "
+                prompt += ", ".join(
+                    f"{sub['summary']}({sub['role'][0].upper()})" for sub in eg["subtasks"]
+                ) + "\n"
+            prompt += "\n"
 
         prompt += (
-            "### NEW USER STORY TO BREAK DOWN:\n"
-            f"Title: {summary}\n"
-            f"Parent SP: {parent_sp}\n"
-            f"Description & AC:\n{description}\n\n"
-            'Output STRICTLY a raw JSON object with key "subtasks": '
-            '{"subtasks": [{"summary": "...", "description": "...", "role": "backend|frontend|mobile", "story_points": 1.0}]}. '
-            "Do NOT wrap in ```json or add any extra text.\n"
+            f"STORY: {summary} (SP:{parent_sp})\n"
+            f"AC:\n{description}\n\n"
         )
+
+        # Strict mode: enforce exact subtask count based on SP
+        if mode == "strict" and max_subtasks:
+            prompt += (
+                f"STRICT MODE: You MUST generate EXACTLY {max_subtasks} subtask(s). No more, no less.\n"
+                f"From all requirements in the AC, pick the {max_subtasks} most crucial task(s).\n"
+                f"Priority order: core UI component > core backend > supporting tasks.\n"
+                f"The JSON array MUST contain exactly {max_subtasks} item(s).\n\n"
+            )
+
+        # Free mode: cover all distinct sections/popups but consolidate fields within same section
+        if mode != "strict":
+            prompt += (
+                "FREE MODE: Cover ALL distinct sections, popups, modals, and BE tasks from the AC. "
+                "Apply SMART CONSOLIDATION: combine all fields/columns/buttons within the same section into 1 subtask. "
+                "Do NOT skip major features, but do NOT create a separate subtask per individual field or column.\n\n"
+            )
+
+        prompt += '{"subtasks":[{"summary":"...","role":"backend|frontend|mobile","story_points":1.0}]}'
 
         # Multi-Model Automatic Fallback Chain with valid Google API model names
         fallback_models = [settings.GENERATION_MODEL, "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-2.5-flash-lite", "gemini-flash-latest"]
@@ -99,19 +127,24 @@ class GeminiLlmClient(ILlmClient):
         for model_name in candidate_models:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={settings.GEMINI_API_KEY}"
             headers = {"Content-Type": "application/json"}
-            payload = {"contents": [{"parts": [{"text": prompt}]}]}
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.0,
+                }
+            }
 
             try:
-                response = requests.post(url, json=payload, headers=headers, timeout=30)
+                response = requests.post(url, json=payload, headers=headers, timeout=15)
                 if response.status_code == 200:
                     res_data = response.json()
                     candidate = res_data["candidates"][0]
                     text_content = candidate["content"]["parts"][0]["text"].strip()
                     break
                 elif response.status_code in [429, 403]:
-                    print(f"Quota limit for [{model_name}] (HTTP {response.status_code}). Waiting 2s & auto-switching model...")
+                    print(f"Quota limit for [{model_name}] (HTTP {response.status_code}). Waiting 8s & auto-switching model...")
                     last_exception = Exception(f"Gemini API limit (HTTP {response.status_code}): {response.text}")
-                    time.sleep(2)
+                    time.sleep(8)
                     continue
                 else:
                     last_exception = Exception(f"Gemini generation API failed ({response.status_code}): {response.text}")
@@ -127,7 +160,6 @@ class GeminiLlmClient(ILlmClient):
             # Clean up potential markdown formatting block: ```json ... ```
             if text_content.startswith("```"):
                 lines = text_content.splitlines()
-                # Remove first line (e.g. ```json) and last line (```)
                 if lines[0].startswith("```"):
                     lines = lines[1:]
                 if lines[-1].startswith("```"):
@@ -157,15 +189,19 @@ class GeminiLlmClient(ILlmClient):
                 else (result if isinstance(result, list) else [])
             )
 
+            import re
+
             for sub in subtasks_list:
                 raw_sp = sub.get("story_points", 1.0)
                 summary_text = str(sub.get("summary", "")).strip()
+
+                # Filter out generic noise tasks (Review Existing Code, Review Design Figma, Review MAB, etc.)
+                summary_lower = summary_text.lower()
+                if re.search(r'\breview\b.*(code|design|figma|existing|mab)', summary_lower) or summary_lower.startswith("review "):
+                    continue
                 
-                # Normalize legacy FE - or WEBAPP - to WEB -
-                if summary_text.upper().startswith("FE - "):
-                    summary_text = "WEB - " + summary_text[5:]
-                elif summary_text.upper().startswith("WEBAPP - "):
-                    summary_text = "WEB - " + summary_text[9:]
+                # Normalize legacy FE - or WEBAPP - or fe - to WEB -
+                summary_text = re.sub(r'^(fe|webapp)\s*-\s*', 'WEB - ', summary_text, flags=re.IGNORECASE)
 
                 role_key = str(sub.get("role", "backend")).lower().strip()
                 prefix = role_prefix_map.get(role_key, "BE")

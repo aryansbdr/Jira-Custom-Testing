@@ -17,20 +17,22 @@ class Settings(BaseSettings):
         "JIRA_STORY_POINTS_FIELD", "customfield_10016"
     )
 
+    # Telegram & MS Teams Configuration
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
+    TEAMS_WEBHOOK_URL: str = os.getenv("TEAMS_WEBHOOK_URL", "")
+
     # Database
     # SQLite DB stored relative to the project root directory
     DATABASE_PATH: str = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "rag_store.db")
     )
 
-    # Role Mappings
+    # Role Mappings (Core active BRI roles: BE, WEB, Mobile)
     ROLE_MAPPINGS: dict = {
-        "backend": "Backend",
-        "frontend": "Frontend",
-        "qa": "QA Engineer",
-        "sad": "SAD",
-        "po": "Product Owner",
-        "project officer": "Project Officer",
+        "backend": "BE",
+        "frontend": "WEB",
+        "mobile": "Mobile",
     }
 
     class Config:

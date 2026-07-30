@@ -62,20 +62,20 @@ def health_check():
     """
     return {
         "status": "active",
-        "message": "Backend is fully operational (Modular DDD)."
+        "message": "Backend aman.!"
     }
 
 @router.get("/epicInfo", tags=["Jira Integration"])
-def get_epic_info(epic_key: str):
+def get_epic_info(ticket: str):
     """
     Fetches all issues under an Epic and returns a dynamic summary of issue counts and statuses.
     """
     try:
-        issues = jira_client.get_epic_issues(epic_key)
+        issues = jira_client.get_epic_issues(ticket)
         if not issues:
             return {
                 "status": "success",
-                "epic_key": epic_key,
+                "epic_key": ticket,
                 "total_issues": 0,
                 "issue_counts": {},
                 "status_counts": {},
@@ -94,7 +94,7 @@ def get_epic_info(epic_key: str):
             
         return {
             "status": "success",
-            "epic_key": epic_key,
+            "epic_key": ticket,
             "total_issues": len(issues),
             "issue_counts": counts,
             "status_counts": status_counts,

@@ -81,40 +81,48 @@ def main():
         print(f"Error parsing members Excel: {e}")
         return
 
-    # 4. Fetch child issues from Jira Epic directly
-    epic_key = input("\nMasukkan Epic Key Jira (contoh: QLOLA-23279): ").strip()
-    if not epic_key:
-        print("Epic Key tidak boleh kosong.")
+    # 4. Fetch issues from Jira — support BOTH Epic Key and single Story/Task Key
+    input_key = input("\nMasukkan Epic Key atau Story/Task Key Jira (contoh: BL-38812 atau BL-38813): ").strip()
+    if not input_key:
+        print("Key tidak boleh kosong.")
         return
 
-    print(f"\nMengambil child issues dari Epic {epic_key} di Jira...")
+    print("\nPilih Mode Generate Subtask:")
+    print("  [1] Mode Bebas   — Generate semua subtask berdasarkan isi AC (default)")
+    print("  [2] Mode Ketat   — Tentukan jumlah subtask berdasarkan SP (1-2SP=1, 3SP=2, 5-8SP=3, 13SP=4 subtask)")
+    mode_input = input("Pilih mode [1/2, default=1]: ").strip()
+    generation_mode = "strict" if mode_input == "2" else "free"
+    mode_label = "KETAT (SP-based)" if generation_mode == "strict" else "BEBAS (AC-based)"
+    print(f"\n Mode dipilih: {mode_label}")
+
     jira_stories = []
     try:
-        jira_stories = jira_client.get_epic_issues(epic_key)
-        if not jira_stories:
-            print(f"Tidak ada child issues ditemukan di bawah Epic {epic_key}.")
-            return
+        # --- Auto-detect: try as Epic first, if no children found treat as single Story ---
+        print(f"\nMengambil issue '{input_key}' dari Jira...")
+        children = jira_client.get_epic_issues(input_key)
 
-        # Group and count issue types dynamically
-        type_counts = {}
-        for s in jira_stories:
-            type_name = s.issue_type.title()
-            type_counts[type_name] = type_counts.get(type_name, 0) + 1
-
-        breakdown_parts = [f"{count} {t_name}" for t_name, count in type_counts.items()]
-        print(
-            f"Ditemukan {len(jira_stories)} issue di bawah Epic {epic_key} ({', '.join(breakdown_parts)})."
-        )
+        if children:
+            jira_stories = children
+            type_counts = {}
+            for s in jira_stories:
+                t = s.issue_type.title()
+                type_counts[t] = type_counts.get(t, 0) + 1
+            breakdown_parts = [f"{v} {k}" for k, v in type_counts.items()]
+            print(f"Ditemukan {len(jira_stories)} issue di bawah Epic {input_key} ({', '.join(breakdown_parts)}).")
+        else:
+            # No children — treat as single Story/Task
+            print(f"Tidak ada child issue. Mengambil '{input_key}' sebagai 1 Story tunggal...")
+            single = jira_client.get_single_issue(input_key)
+            jira_stories = [single]
+            print(f"Berhasil memuat: [{single.key}] {single.summary} ({single.story_points} SP)")
 
     except Exception as e:
         print(f"Gagal mengambil issue dari Jira: {e}")
-        print(
-            "Pastikan konfigurasi JIRA_URL, JIRA_EMAIL, dan JIRA_API_TOKEN di file .env sudah benar."
-        )
+        print("Pastikan konfigurasi JIRA_URL, JIRA_EMAIL, dan JIRA_API_TOKEN di file .env sudah benar.")
         return
 
     # 6. Process RAG + Gemini Subtask Generation
-    print("\nMulai melakukan dekomposisi subtask menggunakan Gemini AI + RAG...")
+    print("\nMulai melakukan dekomposisi subtask...")
     all_subtasks = []
 
     for i, story in enumerate(jira_stories):
@@ -130,7 +138,8 @@ def main():
         desc = story.description or story.summary
         try:
             generated_subs = generate_subtasks_uc.execute(
-                summary=story.summary, description=desc, parent_sp=story.story_points
+                summary=story.summary, description=desc, parent_sp=story.story_points,
+                mode=generation_mode,
             )
             if generated_subs:
                 print(f"   Subtask yang Dihasilkan ({len(generated_subs)} subtask):")
@@ -143,13 +152,13 @@ def main():
                         f"    {sub_idx}. {sub.summary} ({sub.story_points} SP)"
                     )
             else:
-                print("   ℹ️  [SKIPPED] Tiket Kategori Test / Deployment (Dieksepsikan dari pembuatan subtask)")
+                print(" [skip] Tiket Kategori Test / Deployment (Dieksepsikan dari pembuatan subtask)")
         except Exception as e:
-            print(f"   -> Gagal generate subtask untuk {story.key}: {e}")
+            print(f" Gagal generate subtask untuk {story.key}: {e}")
 
-        # Pacing delay to remain within Free Tier RPM (Requests Per Minute) limits
+
         import time
-        time.sleep(2)
+        time.sleep(4)
 
     if not all_subtasks:
         print("\nTidak ada subtask yang berhasil dibuat oleh AI.")
@@ -217,7 +226,7 @@ def main():
             safe_key = "report"
         try:
             filename = reporter.generate_report(balanced, safe_key)
-            print(f"-> Sukses! Laporan Excel berhasil diekspor: '{filename}'")
+            print(f"Sukses! Laporan Excel berhasil diekspor: '{filename}'")
         except Exception as e:
             print(f"Warning: Gagal mengekspor laporan Excel: {e}")
 

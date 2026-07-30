@@ -12,7 +12,19 @@ class WorkloadBalancerService:
     def balance(
         self, employees: List[Employee], subtasks: List[Subtask]
     ) -> Dict[str, Any]:
-        # Track workload allocations
+        def _normalize_role(r_str: str) -> str:
+            s = str(r_str or "").strip().lower()
+            if "back" in s or s == "be":
+                return "be"
+            if "front" in s or "web" in s or s == "fe":
+                return "web"
+            if "mob" in s or "android" in s or "ios" in s or "app" in s:
+                return "mobile"
+            return settings.ROLE_MAPPINGS.get(s, s).strip().lower()
+
+        active_roles_lower = {"be", "web", "mobile"}
+
+        # Track workload allocations only for active engineering roles (BE, WEB, Mobile)
         employee_loads = {
             emp.pn: {
                 "employee": emp.to_dict(),
@@ -20,31 +32,41 @@ class WorkloadBalancerService:
                 "total_story_points": 0.0,
             }
             for emp in employees
+            if _normalize_role(emp.role) in active_roles_lower
         }
-
-        # Index employee PNs by role
+        
         employees_by_role = {}
         for emp in employees:
-            role_norm = emp.role.strip().lower()
-            if role_norm not in employees_by_role:
-                employees_by_role[role_norm] = []
-            employees_by_role[role_norm].append(emp.pn)
+            mapped_norm = _normalize_role(emp.role)
+            if mapped_norm not in active_roles_lower:
+                continue
+            if mapped_norm not in employees_by_role:
+                employees_by_role[mapped_norm] = []
+            employees_by_role[mapped_norm].append(emp.pn)
 
         unassigned_subtasks = []
 
-        # Group subtasks by role key
-        subtasks_by_role = {}
+        # Group subtasks by (role_norm, parent_key) block
+        # Guarantees that ALL subtasks under 1 Story for 1 role go to the SAME person
+        role_parent_blocks = {}
         for sub in subtasks:
-            sub_role_key = sub.role.lower()
-            mapped_role_name = settings.ROLE_MAPPINGS.get(sub_role_key, sub_role_key)
-            mapped_role_norm = mapped_role_name.strip().lower()
+            mapped_role_norm = _normalize_role(sub.role)
+            pkey = getattr(sub, "parent_key", None) or "GENERAL"
+            
+            key = (mapped_role_norm, pkey)
+            if key not in role_parent_blocks:
+                role_parent_blocks[key] = []
+            role_parent_blocks[key].append(sub)
 
-            if mapped_role_norm not in subtasks_by_role:
-                subtasks_by_role[mapped_role_norm] = []
-            subtasks_by_role[mapped_role_norm].append(sub)
+        # Group blocks by role_norm
+        blocks_by_role = {}
+        for (role_norm, pkey), block_subs in role_parent_blocks.items():
+            if role_norm not in blocks_by_role:
+                blocks_by_role[role_norm] = []
+            blocks_by_role[role_norm].append(block_subs)
 
-        # Distribute workloads role by role
-        for role_norm, role_subs in subtasks_by_role.items():
+        # Distribute workloads role by role (Story block by Story block)
+        for role_norm, blocks in blocks_by_role.items():
             candidate_pns = employees_by_role.get(role_norm, [])
 
             # Fuzzy match if exact is missing
@@ -55,22 +77,29 @@ class WorkloadBalancerService:
                         candidate_pns.extend(pns)
 
             if not candidate_pns:
-                for sub in role_subs:
-                    unassigned_subtasks.append(sub.to_dict())
+                for block in blocks:
+                    for sub in block:
+                        unassigned_subtasks.append(sub.to_dict())
                 continue
 
-            # Sort subtasks descending by effort (LPT heuristic)
-            sorted_subs = sorted(role_subs, key=lambda x: x.story_points, reverse=True)
+            # Sort blocks descending by total SP (LPT heuristic per story block)
+            sorted_blocks = sorted(
+                blocks,
+                key=lambda blk: sum(s.story_points for s in blk),
+                reverse=True
+            )
 
-            for sub in sorted_subs:
+            for blk in sorted_blocks:
                 # Find candidate with the minimum total workload points
                 selected_pn = min(
                     candidate_pns,
                     key=lambda pn: employee_loads[pn]["total_story_points"],
                 )
 
-                employee_loads[selected_pn]["assigned_subtasks"].append(sub.to_dict())
-                employee_loads[selected_pn]["total_story_points"] += sub.story_points
+                blk_sp = sum(s.story_points for s in blk)
+                for sub in blk:
+                    employee_loads[selected_pn]["assigned_subtasks"].append(sub.to_dict())
+                employee_loads[selected_pn]["total_story_points"] += blk_sp
 
         return {
             "assignments": list(employee_loads.values()),

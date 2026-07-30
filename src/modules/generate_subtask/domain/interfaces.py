@@ -79,5 +79,8 @@ class ILlmClient(ABC):
         description: str,
         parent_sp: float,
         examples: List[Dict[str, Any]],
+        db_patterns: Dict[str, Any] = None,
+        mode: str = "free",
+        max_subtasks: int = None,
     ) -> List[Subtask]:
         pass
