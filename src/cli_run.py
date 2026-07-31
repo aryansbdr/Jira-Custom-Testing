@@ -157,8 +157,7 @@ def main():
             print(f" Gagal generate subtask untuk {story.key}: {e}")
 
 
-        import time
-        time.sleep(4)
+
 
     if not all_subtasks:
         print("\nTidak ada subtask yang berhasil dibuat oleh AI.")

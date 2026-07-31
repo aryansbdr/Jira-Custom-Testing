@@ -44,8 +44,19 @@ class JiraRestClient(IJiraClient):
         # Server PAT does not use Basic Auth parameters
         return None
 
+    def _clean_key(self, raw_key: str) -> str:
+        if not raw_key:
+            return ""
+        raw_key = raw_key.strip()
+        # Extract issue key if full URL is passed (e.g. https://domain.atlassian.net/browse/SCRUM-15)
+        if "/browse/" in raw_key:
+            raw_key = raw_key.split("/browse/")[-1].split("?")[0].split("#")[0].strip()
+        return raw_key
+
     def get_epic_issues(self, epic_key: str) -> List[Story]:
-        epic_key = epic_key.strip()
+        epic_key = self._clean_key(epic_key)
+        if not epic_key:
+            return []
         # Jira Cloud has migrated search to /rest/api/3/search/jql, Server remains on /rest/api/2/search
         if self._is_cloud():
             url = f"{settings.JIRA_URL.rstrip('/')}/rest/api/3/search/jql"
@@ -68,51 +79,71 @@ class JiraRestClient(IJiraClient):
             url, headers=headers, params=params, auth=auth, timeout=20
         )
 
-        if response.status_code != 200:
-            raise Exception(
-                f"Failed to fetch issues from Jira ({response.status_code}): {response.text}"
-            )
-
-        data = response.json()
         stories = []
 
-        for item in data.get("issues", []):
-            fields = item.get("fields", {})
+        if response.status_code == 200:
+            data = response.json()
+            for item in data.get("issues", []):
+                fields = item.get("fields", {})
 
-            description_text = ""
-            desc_obj = fields.get("description")
-            if isinstance(desc_obj, str):
-                description_text = desc_obj
-            elif isinstance(desc_obj, dict):
-                description_text = self._parse_adf_to_text(desc_obj)
+                description_text = ""
+                desc_obj = fields.get("description")
+                if isinstance(desc_obj, str):
+                    description_text = desc_obj
+                elif isinstance(desc_obj, dict):
+                    description_text = self._parse_adf_to_text(desc_obj)
 
-            sp_val = fields.get(settings.JIRA_STORY_POINTS_FIELD)
-            try:
-                sp_val = float(sp_val) if sp_val is not None else 0.0
-            except ValueError:
-                sp_val = 0.0
+                sp_val = fields.get(settings.JIRA_STORY_POINTS_FIELD)
+                try:
+                    sp_val = float(sp_val) if sp_val is not None else 0.0
+                except ValueError:
+                    sp_val = 0.0
 
-            if description_text:
-                description_text = description_text.replace("\r", "")
+                if description_text:
+                    description_text = description_text.replace("\r", "")
 
-            status_name = fields.get("status", {}).get("name", "To Do")
+                issuetype_obj = fields.get("issuetype") or {}
+                issuetype_name = issuetype_obj.get("name", "Story") if isinstance(issuetype_obj, dict) else "Story"
 
-            stories.append(
-                Story(
-                    key=item.get("key"),
-                    summary=fields.get("summary", ""),
-                    story_points=sp_val,
-                    description=description_text,
-                    issue_type=fields.get("issuetype", {}).get("name", "Story"),
-                    status=status_name,
+                status_obj = fields.get("status") or {}
+                status_name = status_obj.get("name", "To Do") if isinstance(status_obj, dict) else "To Do"
+
+                summary_text = fields.get("summary") or ""
+                stories.append(
+                    Story(
+                        key=item.get("key") or "",
+                        summary=summary_text,
+                        story_points=sp_val,
+                        description=description_text or "",
+                        issue_type=issuetype_name,
+                        status=status_name,
+                    )
                 )
-            )
+
+        # Fallback for Jira Cloud if JQL returns no children: check parent issue directly
+        if not stories and self._is_cloud():
+            try:
+                single_url = f"{settings.JIRA_URL.rstrip('/')}/rest/api/3/issue/{epic_key}"
+                single_res = requests.get(single_url, headers=headers, auth=auth, timeout=15)
+                if single_res.status_code == 200:
+                    p_data = single_res.json()
+                    sub_items = p_data.get("fields", {}).get("subtasks", []) or p_data.get("fields", {}).get("issuelinks", [])
+                    for child_item in sub_items:
+                        c_key = child_item.get("key") or child_item.get("outwardIssue", {}).get("key") or child_item.get("inwardIssue", {}).get("key")
+                        if c_key:
+                            child_story = self.get_single_issue(c_key)
+                            if child_story:
+                                stories.append(child_story)
+            except Exception:
+                pass
 
         return stories
 
     def get_single_issue(self, issue_key: str) -> Optional[Story]:
         """Fetch a single Story/Task by its key (for single-ticket subtask generation)."""
-        issue_key = issue_key.strip()
+        issue_key = self._clean_key(issue_key)
+        if not issue_key:
+            return None
         url = f"{settings.JIRA_URL.rstrip('/')}/rest/api/2/issue/{issue_key}"
         headers = self._get_headers()
         auth = self._get_auth()
@@ -143,13 +174,20 @@ class JiraRestClient(IJiraClient):
         except ValueError:
             sp_val = 0.0
 
+        issuetype_obj = fields.get("issuetype") or {}
+        issuetype_name = issuetype_obj.get("name", "Story") if isinstance(issuetype_obj, dict) else "Story"
+
+        status_obj = fields.get("status") or {}
+        status_name = status_obj.get("name", "To Do") if isinstance(status_obj, dict) else "To Do"
+
+        summary_text = fields.get("summary") or ""
         return Story(
-            key=item.get("key"),
-            summary=fields.get("summary", ""),
+            key=item.get("key") or "",
+            summary=summary_text,
             story_points=sp_val,
-            description=description_text,
-            issue_type=fields.get("issuetype", {}).get("name", "Story"),
-            status=fields.get("status", {}).get("name", "To Do"),
+            description=description_text or "",
+            issue_type=issuetype_name,
+            status=status_name,
         )
 
     def find_user_by_name(
@@ -217,11 +255,11 @@ class JiraRestClient(IJiraClient):
         # Determine candidate subtask issue type names (case-sensitive in Jira Server)
         parent_type_lower = parent_type.lower() if parent_type else "task"
         if "bug" in parent_type_lower:
-            candidate_type_names = ["Sub Bug", "Sub-Bug", "Sub-bug", "sub bug"]
+            candidate_type_names = ["Subtask", "Sub-task", "Sub Bug", "Sub-Bug", "Sub-bug", "sub bug"]
         elif "documentation" in parent_type_lower:
-            candidate_type_names = ["Sub Documentation", "Sub-Documentation", "sub documentation"]
+            candidate_type_names = ["Subtask", "Sub-task", "Sub Documentation", "Sub-Documentation", "sub documentation"]
         else:
-            candidate_type_names = ["Sub-Task", "Sub-task", "Subtask", "Sub task", "sub task"]
+            candidate_type_names = ["Subtask", "Sub-task", "Sub-Task", "Sub task", "Task", "Story"]
 
         last_response = None
         for type_name in candidate_type_names:
@@ -249,6 +287,15 @@ class JiraRestClient(IJiraClient):
             )
             if response.status_code in (200, 201):
                 return response.json()
+
+            # Fallback 1: If story points customfield is rejected, retry without it
+            if response.status_code == 400 and settings.JIRA_STORY_POINTS_FIELD in response.text:
+                payload["fields"].pop(settings.JIRA_STORY_POINTS_FIELD, None)
+                response = requests.post(
+                    url, headers=headers, json=payload, auth=auth, timeout=15
+                )
+                if response.status_code in (200, 201):
+                    return response.json()
 
             if assignee_id and not self._is_cloud():
                 # Fallback to try accountId if Server setup uses cloud format
