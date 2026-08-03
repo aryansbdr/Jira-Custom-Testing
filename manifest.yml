@@ -2,16 +2,20 @@ permissions:
   scopes:
     - read:jira-work
     - write:jira-work
-modules: 
-      
+  external:
+    fetch:
+      backend:
+        - 'https://*.loca.lt'
+
+modules:
   jira:issueActivity:
     - key: subtask-recommendation-activity
       resource: main
       resolver:
         function: resolver-fn
       title: Sub-Task Recommendations
-      icon: https://developer.atlassian.com/platform/forge/images/issue-panel-icon.svg  
-  
+      icon: https://developer.atlassian.com/platform/forge/images/issue-panel-icon.svg
+
   jira:projectPage:
     - key: squad-reporting-page
       resource: main
