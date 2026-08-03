@@ -240,9 +240,13 @@ def main():
         print("Proses dibatalkan. Tidak ada perubahan yang disimpan ke Jira.")
         return
 
-    # 10. Write subtasks to Jira
+    # 10. Write subtasks to Jira (With Deduplication Check)
     print("\nMulai menulis subtask ke Jira...")
     created_count = 0
+    skipped_count = 0
+
+    # Cache existing subtask summaries per parent key to avoid duplicate Jira issues
+    parent_existing_subtasks = {}
 
     for item in active_assignments:
         emp = item["employee"]
@@ -255,13 +259,29 @@ def main():
             )
 
         for t in item["assigned_subtasks"]:
+            parent_key = t["parent_key"]
+            sub_summary = t["summary"].strip()
+            sub_summary_lower = sub_summary.lower()
+
+            # Lazy-load existing subtasks for this parent
+            if parent_key not in parent_existing_subtasks:
+                parent_existing_subtasks[parent_key] = jira_client.get_existing_subtask_summaries(parent_key)
+
+            existing_titles = parent_existing_subtasks[parent_key]
+
+            # DEDUPLICATION CHECK: Skip if already exists in Jira
+            if sub_summary_lower in existing_titles:
+                print(f" [SKIP DUPLIKAT] Subtask '{sub_summary}' sudah ada di tiket {parent_key}.")
+                skipped_count += 1
+                continue
+
             print(
-                f"Membuat subtask: '{t['summary']}' di bawah parent {t['parent_key']}..."
+                f"Membuat subtask: '{sub_summary}' di bawah parent {parent_key}..."
             )
             try:
                 result = jira_client.create_subtask_issue(
-                    parent_key=t["parent_key"],
-                    summary=t["summary"],
+                    parent_key=parent_key,
+                    summary=sub_summary,
                     description=t["description"],
                     story_points=t["story_points"],
                     assignee_id=jira_id,
@@ -270,10 +290,15 @@ def main():
 
                 print(f"Sukses! Subtask Key: {result.get('key')}")
                 created_count += 1
+                # Add to local cache so we don't duplicate within the same run
+                existing_titles.add(sub_summary_lower)
             except Exception as e:
                 print(f" Gagal membuat subtask: {e}")
 
-    print(f"\nSelesai! Berhasil membuat {created_count} subtask di Jira.")
+    summary_msg = f"\nSelesai! Berhasil membuat {created_count} subtask baru di Jira."
+    if skipped_count > 0:
+        summary_msg += f" ({skipped_count} subtask duplikat dilewati)."
+    print(summary_msg)
 
 
 if __name__ == "__main__":

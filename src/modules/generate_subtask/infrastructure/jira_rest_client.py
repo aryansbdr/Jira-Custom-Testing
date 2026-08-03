@@ -139,6 +139,30 @@ class JiraRestClient(IJiraClient):
 
         return stories
 
+    def get_existing_subtask_summaries(self, parent_key: str) -> set:
+        """Fetch all existing subtask summary titles for a given parent issue key (for deduplication)."""
+        parent_key = self._clean_key(parent_key)
+        if not parent_key:
+            return set()
+        
+        headers = self._get_headers()
+        auth = self._get_auth()
+        
+        # Cloud uses API v3, Server uses v2
+        version = "3" if self._is_cloud() else "2"
+        url = f"{settings.JIRA_URL.rstrip('/')}/rest/api/{version}/issue/{parent_key}?fields=subtasks"
+        
+        try:
+            response = requests.get(url, headers=headers, auth=auth, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                subtasks = data.get("fields", {}).get("subtasks", [])
+                return {st.get("fields", {}).get("summary", "").strip().lower() for st in subtasks if st.get("fields", {}).get("summary")}
+        except Exception as e:
+            print(f"Warning: Failed to fetch existing subtasks for {parent_key}: {e}")
+            
+        return set()
+
     def get_single_issue(self, issue_key: str) -> Optional[Story]:
         """Fetch a single Story/Task by its key (for single-ticket subtask generation)."""
         issue_key = self._clean_key(issue_key)
