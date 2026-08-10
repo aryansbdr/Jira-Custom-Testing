@@ -17,12 +17,12 @@ modules:
       icon: https://developer.atlassian.com/platform/forge/images/issue-panel-icon.svg
 
   jira:projectPage:
-    - key: squad-reporting-page
+    - key: custom-reports-with-filter
+      title: Reports Overview
       resource: main
       resolver:
         function: resolver-fn
-      title: Squad Progress Report
-      icon: https://developer.atlassian.com/platform/forge/images/icons/issue-activity.svg
+      icon: https://developer.atlassian.com/platform/forge/images/icons/issue.svg
 
   function:
     - key: resolver-fn
@@ -31,10 +31,8 @@ modules:
 resources:
   - key: main
     path: frontend/build
-    tunnel:
-      port: 3000
 
 app:
-  id: ari:cloud:ecosystem::app/9d57a998-a8b0-427d-94ee-3c7f1e001249
   runtime:
     name: nodejs22.x
+  id: ari:cloud:ecosystem::app/8ca09d8a-834f-4d0c-9e63-2f77acc3f4ff

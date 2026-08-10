@@ -47,7 +47,7 @@ function extractTextFromADF(adf) {
 
 
 // ============================================================
-// NORMALIZE ROLE
+// NORMALIZE ROLE & SQUAD EXTRACTION
 // ============================================================
 
 function normalizeCategory(role) {
@@ -60,16 +60,18 @@ function normalizeCategory(role) {
     value === 'front-end' ||
     value === 'front end' ||
     value === 'fe' ||
-    value === 'web'
+    value === 'web' ||
+    value === 'ui'
   ) {
-    return 'Frontend';
+    return 'WEB';
   }
 
   if (
     value === 'backend' ||
     value === 'back-end' ||
     value === 'back end' ||
-    value === 'be'
+    value === 'be' ||
+    value === 'api'
   ) {
     return 'Backend';
   }
@@ -77,7 +79,9 @@ function normalizeCategory(role) {
   if (
     value === 'mobile' ||
     value === 'android' ||
-    value === 'ios'
+    value === 'ios' ||
+    value === 'flutter' ||
+    value === 'mob'
   ) {
     return 'Mobile';
   }
@@ -86,12 +90,91 @@ function normalizeCategory(role) {
     value === 'qa' ||
     value === 'quality assurance' ||
     value === 'tester' ||
-    value === 'testing'
+    value === 'testing' ||
+    value === 'pengujian'
   ) {
     return 'QA';
   }
 
   return 'Backend';
+}
+
+function extractSquadName(summary = '') {
+  const text = String(summary || '').trim();
+
+  // 1. Prioritas Utama: Cek prefix kurung siku [WEB], [BE], [Mobile], [QA]
+  const match = text.match(/^\[(.*?)\]/);
+  if (match && match[1]) {
+    return normalizeCategory(match[1].trim());
+  }
+
+  // 2. Deteksi Mobile: Diawali atau mengandung kata "Mobile" / "MOB"
+  if (/^mobile/i.test(text) || /\bmobile\b/i.test(text) || /^mob\b/i.test(text)) {
+    return 'Mobile';
+  }
+
+  // 3. Deteksi Backend: Diawali "BE" atau mengandung kata "Backend"
+  if (/^be\b/i.test(text) || /\bbackend\b/i.test(text)) {
+    return 'Backend';
+  }
+
+  // 4. Deteksi WEB: Diawali "WEB", "FE", atau mengandung "Frontend"
+  if (/^web\b/i.test(text) || /^fe\b/i.test(text) || /\bfrontend\b/i.test(text)) {
+    return 'WEB';
+  }
+
+  // 5. Deteksi QA
+  if (/^qa\b/i.test(text) || /\btesting\b/i.test(text) || /\bpengujian\b/i.test(text)) {
+    return 'QA';
+  }
+
+  // 6. Fallback: Analisis kata kunci di dalam string
+  const lower = text.toLowerCase();
+
+  if (
+    lower.includes('web') ||
+    lower.includes('frontend') ||
+    lower.includes('front-end') ||
+    lower.includes('fe') ||
+    lower.includes('ui') ||
+    lower.includes('tampilan')
+  ) {
+    return 'WEB';
+  }
+
+  if (
+    lower.includes('backend') ||
+    lower.includes('back-end') ||
+    lower.includes('be') ||
+    lower.includes('api') ||
+    lower.includes('otp') ||
+    lower.includes('log') ||
+    lower.includes('database') ||
+    lower.includes('integrasi')
+  ) {
+    return 'Backend';
+  }
+
+  if (
+    lower.includes('qa') ||
+    lower.includes('testing') ||
+    lower.includes('test') ||
+    lower.includes('pengujian') ||
+    lower.includes('review')
+  ) {
+    return 'QA';
+  }
+
+  if (
+    lower.includes('mobile') ||
+    lower.includes('android') ||
+    lower.includes('ios') ||
+    lower.includes('flutter')
+  ) {
+    return 'Mobile';
+  }
+
+  return 'Lainnya';
 }
 
 
@@ -100,10 +183,6 @@ function normalizeCategory(role) {
 // ============================================================
 
 function normalizeTask(task, index, category) {
-  // ----------------------------------------
-  // Jika AI mengembalikan string
-  // ----------------------------------------
-
   if (typeof task === 'string') {
     const text = task.trim();
 
@@ -116,11 +195,6 @@ function normalizeTask(task, index, category) {
       story_points: 1,
     };
   }
-
-
-  // ----------------------------------------
-  // Jika AI mengembalikan object
-  // ----------------------------------------
 
   const summary =
     task?.summary ||
@@ -167,304 +241,71 @@ function normalizeTask(task, index, category) {
 // ============================================================
 
 function extractSubtasksFromAIResponse(resJson) {
-  console.log(
-    '============================================================'
-  );
-
-  console.log(
-    '[Forge Resolver] Mencoba membaca response FastAPI...'
-  );
-
-  console.log(
-    '[Forge Resolver] Response:',
-    JSON.stringify(resJson, null, 2)
-  );
-
-
-  // ==========================================================
-  // CASE 1
-  //
-  // [
-  //   {
-  //      summary: "...",
-  //      role: "backend"
-  //   }
-  // ]
-  // ==========================================================
-
   if (Array.isArray(resJson)) {
-    console.log(
-      '[Forge Resolver] Format response: ARRAY'
-    );
-
     return resJson;
   }
 
-
-  // ==========================================================
-  // CASE 2
-  //
-  // {
-  //   subtasks: [...]
-  // }
-  // ==========================================================
-
   if (Array.isArray(resJson?.subtasks)) {
-    console.log(
-      '[Forge Resolver] Format response: subtasks[]'
-    );
-
     return resJson.subtasks;
   }
 
-
-  // ==========================================================
-  // CASE 3
-  //
-  // {
-  //   results: [...]
-  // }
-  // ==========================================================
-
   if (Array.isArray(resJson?.results)) {
-    console.log(
-      '[Forge Resolver] Format response: results[]'
-    );
-
     return resJson.results;
   }
 
-
-  // ==========================================================
-  // CASE 4
-  //
-  // {
-  //   data: [...]
-  // }
-  // ==========================================================
-
   if (Array.isArray(resJson?.data)) {
-    console.log(
-      '[Forge Resolver] Format response: data[]'
-    );
-
     return resJson.data;
   }
 
-
-  // ==========================================================
-  // CASE 5
-  //
-  // {
-  //   result: [...]
-  // }
-  // ==========================================================
-
   if (Array.isArray(resJson?.result)) {
-    console.log(
-      '[Forge Resolver] Format response: result[]'
-    );
-
     return resJson.result;
   }
 
-
-  // ==========================================================
-  // CASE 6
-  //
-  // {
-  //   recommendations: [...]
-  // }
-  // ==========================================================
-
   if (Array.isArray(resJson?.recommendations)) {
-    console.log(
-      '[Forge Resolver] Format response: recommendations[]'
-    );
-
     return resJson.recommendations;
   }
 
-
-  // ==========================================================
-  // CASE 7
-  //
-  // {
-  //   generated_subtasks: [...]
-  // }
-  // ==========================================================
-
   if (Array.isArray(resJson?.generated_subtasks)) {
-    console.log(
-      '[Forge Resolver] Format response: generated_subtasks[]'
-    );
-
     return resJson.generated_subtasks;
   }
 
-
-  // ==========================================================
-  // CASE 8
-  //
-  // {
-  //   generatedSubtasks: [...]
-  // }
-  // ==========================================================
-
   if (Array.isArray(resJson?.generatedSubtasks)) {
-    console.log(
-      '[Forge Resolver] Format response: generatedSubtasks[]'
-    );
-
     return resJson.generatedSubtasks;
   }
 
-
-  // ==========================================================
-  // CASE 9
-  //
-  // {
-  //   results: {
-  //      subtasks: [...]
-  //   }
-  // }
-  // ==========================================================
-
   if (Array.isArray(resJson?.results?.subtasks)) {
-    console.log(
-      '[Forge Resolver] Format response: results.subtasks[]'
-    );
-
     return resJson.results.subtasks;
   }
 
-
-  // ==========================================================
-  // CASE 10
-  //
-  // {
-  //   data: {
-  //      subtasks: [...]
-  //   }
-  // }
-  // ==========================================================
-
   if (Array.isArray(resJson?.data?.subtasks)) {
-    console.log(
-      '[Forge Resolver] Format response: data.subtasks[]'
-    );
-
     return resJson.data.subtasks;
   }
 
-
-  // ==========================================================
-  // CASE 11
-  //
-  // {
-  //   result: {
-  //      subtasks: [...]
-  //   }
-  // }
-  // ==========================================================
-
   if (Array.isArray(resJson?.result?.subtasks)) {
-    console.log(
-      '[Forge Resolver] Format response: result.subtasks[]'
-    );
-
     return resJson.result.subtasks;
   }
 
-
-  // ==========================================================
-  // CASE 12
-  //
-  // {
-  //   data: {
-  //      results: [...]
-  //   }
-  // }
-  // ==========================================================
-
   if (Array.isArray(resJson?.data?.results)) {
-    console.log(
-      '[Forge Resolver] Format response: data.results[]'
-    );
-
     return resJson.data.results;
   }
 
-
-  // ==========================================================
-  // CASE 13
-  //
-  // {
-  //   results: {
-  //      results: [...]
-  //   }
-  // }
-  // ==========================================================
-
   if (Array.isArray(resJson?.results?.results)) {
-    console.log(
-      '[Forge Resolver] Format response: results.results[]'
-    );
-
     return resJson.results.results;
   }
 
-
-  // ==========================================================
-  // CASE 14 — FORMAT FASTAPI SAAT INI
-  //
-  // {
-  //   status: "success",
-  //   results: {
-  //     assignments: [
-  //       {
-  //         employee: {...},
-  //         assigned_subtasks: [...]
-  //       }
-  //     ],
-  //     unassigned_subtasks: [...]
-  //   }
-  // }
-  // ==========================================================
-
-  if (
-    Array.isArray(resJson?.results?.assignments)
-  ) {
-    console.log(
-      '[Forge Resolver] Format response: results.assignments[].assigned_subtasks[]'
-    );
-
+  if (Array.isArray(resJson?.results?.assignments)) {
     const assignedSubtasks =
       resJson.results.assignments.flatMap(
         (assignment) =>
-          Array.isArray(
-            assignment?.assigned_subtasks
-          )
+          Array.isArray(assignment?.assigned_subtasks)
             ? assignment.assigned_subtasks
             : []
       );
 
     const unassignedSubtasks =
-      Array.isArray(
-        resJson?.results?.unassigned_subtasks
-      )
+      Array.isArray(resJson?.results?.unassigned_subtasks)
         ? resJson.results.unassigned_subtasks
         : [];
-
-    console.log(
-      '[Forge Resolver] Assigned subtasks:',
-      assignedSubtasks.length
-    );
-
-    console.log(
-      '[Forge Resolver] Unassigned subtasks:',
-      unassignedSubtasks.length
-    );
 
     return [
       ...assignedSubtasks,
@@ -472,37 +313,14 @@ function extractSubtasksFromAIResponse(resJson) {
     ];
   }
 
-
-  // ==========================================================
-  // CASE 15
-  //
-  // Fallback jika assignments langsung berisi subtasks
-  // ==========================================================
-
-  if (
-    Array.isArray(resJson?.assignments)
-  ) {
-    console.log(
-      '[Forge Resolver] Format response: assignments[]'
+  if (Array.isArray(resJson?.assignments)) {
+    return resJson.assignments.flatMap(
+      (assignment) =>
+        Array.isArray(assignment?.assigned_subtasks)
+          ? assignment.assigned_subtasks
+          : []
     );
-
-    const assignedSubtasks =
-      resJson.assignments.flatMap(
-        (assignment) =>
-          Array.isArray(
-            assignment?.assigned_subtasks
-          )
-            ? assignment.assigned_subtasks
-            : []
-      );
-
-    return assignedSubtasks;
   }
-
-
-  console.warn(
-    '[Forge Resolver] TIDAK menemukan array subtasks di response FastAPI.'
-  );
 
   return [];
 }
@@ -530,15 +348,9 @@ function convertSubtasksToGroups(subtasks) {
         'backend';
     }
 
-    const category =
-      normalizeCategory(role);
+    const category = normalizeCategory(role);
 
-    const task =
-      normalizeTask(
-        rawTask,
-        index,
-        category
-      );
+    const task = normalizeTask(rawTask, index, category);
 
     if (!task.text) {
       return;
@@ -555,16 +367,11 @@ function convertSubtasksToGroups(subtasks) {
     groupMap[category].tasks.push(task);
   });
 
-
-  const groups =
-    Object.values(groupMap);
-
+  const groups = Object.values(groupMap);
 
   groups.forEach((group) => {
-    group.badgeCount =
-      `${group.tasks.length} task`;
+    group.badgeCount = `${group.tasks.length} task`;
   });
-
 
   return groups;
 }
@@ -574,1039 +381,571 @@ function convertSubtasksToGroups(subtasks) {
 // 1. SQUAD PROGRESS REPORT
 // ============================================================
 
-resolver.define(
-  'getSquadProgress',
-  async (req) => {
-    try {
-      const {
-        projectKey = 'SCRUM',
-      } = req.payload || {};
+resolver.define('getSquadProgress', async (req) => {
+  try {
+    const { projectKey = 'SCRUM' } = req.payload || {};
+    const jql = `project = "${projectKey}" AND issuetype in subTaskIssueTypes() ORDER BY parent`;
 
-      const jql =
-        `project = "${projectKey}" AND issuetype in subTaskIssueTypes()`;
+    let allSubtasks = [];
+    let startAt = 0;
+    let isLastPage = false;
+    const maxResultsPerPage = 100;
 
-      console.log(
-        '[Squad Report] JQL:',
-        jql
-      );
-
-
-      const response =
-        await api
-          .asUser()
-          .requestJira(
-            route`/rest/api/3/search/jql`,
-            {
-              method: 'POST',
-
-              headers: {
-                Accept:
-                  'application/json',
-
-                'Content-Type':
-                  'application/json',
-              },
-
-              body:
-                JSON.stringify({
-                  jql,
-
-                  fields: [
-                    'summary',
-                    'status',
-                    'assignee',
-                    'parent',
-                  ],
-                }),
-            }
-          );
-
+    while (!isLastPage && allSubtasks.length < 1000) {
+      let response = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          jql,
+          startAt,
+          maxResults: maxResultsPerPage,
+          fields: ['summary', 'status', 'assignee', 'parent'],
+        }),
+      });
 
       if (!response.ok) {
-        console.error(
-          '[Squad Report] Jira error:',
-          await response.text()
-        );
+        const errorText = await response.text();
+        console.error('[Squad Report] Jira API Error:', response.status, errorText);
+        break;
+      }
 
-        return {
-          parentIssues: [],
-          squadsList: [],
-          memberDataBySquad: {},
+      const data = await response.json();
+      const fetchedIssues = Array.isArray(data.issues) ? data.issues : [];
+      allSubtasks.push(...fetchedIssues);
+
+      if (fetchedIssues.length < maxResultsPerPage || allSubtasks.length >= (data.total || 0)) {
+        isLastPage = true;
+      } else {
+        startAt += fetchedIssues.length;
+      }
+    }
+
+    const parentMap = {};
+    const allStatuses = new Set();
+
+    allSubtasks.forEach((issue) => {
+      const fields = issue.fields || {};
+      const parentKey = fields.parent?.key;
+
+      if (!parentKey) return;
+
+      const parentSummary = fields.parent?.fields?.summary || parentKey;
+      const summary = fields.summary || '';
+      const statusName = fields.status?.name || 'To Do';
+      const assigneeName = fields.assignee?.displayName || 'Unassigned';
+
+      allStatuses.add(statusName);
+      const squadName = extractSquadName(summary);
+
+      if (!parentMap[parentKey]) {
+        parentMap[parentKey] = {
+          key: parentKey,
+          title: `${parentSummary} (${parentKey})`,
+          parentSummary: parentSummary,
+          squadStats: {},
+          memberStats: {},
+          totalSubtasks: 0,
+          completedSubtasks: 0,
         };
       }
 
+      const parent = parentMap[parentKey];
+      parent.totalSubtasks += 1;
 
-      const data =
-        await response.json();
+      const statusLower = statusName.toLowerCase();
+      if (['done', 'closed', 'resolved', 'selesai', 'complete', 'completed'].includes(statusLower)) {
+        parent.completedSubtasks += 1;
+      }
 
-      const issues =
-        Array.isArray(data.issues)
-          ? data.issues
-          : [];
+      if (!parent.squadStats[squadName]) {
+        parent.squadStats[squadName] = { total: 0 };
+      }
+      const squadStats = parent.squadStats[squadName];
+      squadStats[statusName] = (squadStats[statusName] || 0) + 1;
+      squadStats.total = (squadStats.total || 0) + 1;
 
+      if (!parent.memberStats[squadName]) {
+        parent.memberStats[squadName] = {};
+      }
+      if (!parent.memberStats[squadName][assigneeName]) {
+        parent.memberStats[squadName][assigneeName] = { total: 0 };
+      }
+      const memberStats = parent.memberStats[squadName][assigneeName];
+      memberStats[statusName] = (memberStats[statusName] || 0) + 1;
+      memberStats.total = (memberStats.total || 0) + 1;
+    });
 
-      const parentMap = {};
-      const squadSet = new Set();
-      const memberMapBySquad = {};
+    const DEFAULT_ROLES = ['Backend', 'WEB', 'Mobile', 'QA', 'Lainnya'];
+    const statusList = Array.from(allStatuses);
 
-
-      const initStats = () => ({
-        todo: 0,
-        inProgress: 0,
-        done: 0,
-        total: 0,
+    const parentIssues = Object.values(parentMap).map((parent) => {
+      DEFAULT_ROLES.forEach((role) => {
+        if (!parent.squadStats[role]) {
+          parent.squadStats[role] = { total: 0 };
+        }
       });
 
-
-      issues.forEach((issue) => {
-        const parentKey =
-          issue.fields?.parent?.key ||
-          'Lainnya';
-
-        const parentSummary =
-          issue.fields?.parent?.fields?.summary ||
-          parentKey;
-
-        const summary =
-          issue.fields?.summary ||
-          '';
-
-        const statusCategory =
-          issue.fields?.status?.statusCategory?.key;
-
-        const assigneeName =
-          issue.fields?.assignee?.displayName ||
-          'Unassigned';
-
-
-        const match =
-          summary.match(/^\[(.*?)\]/);
-
-        const squadName =
-          match
-            ? match[1].trim()
-            : 'Lainnya';
-
-
-        squadSet.add(
-          squadName
-        );
-
-
-        if (!parentMap[parentKey]) {
-          parentMap[parentKey] = {
-            key: parentKey,
-
-            title:
-              `${parentSummary} (${parentKey})`,
-
-            squadMap: {},
-          };
-        }
-
-
-        if (
-          !parentMap[parentKey]
-            .squadMap[squadName]
-        ) {
-          parentMap[parentKey]
-            .squadMap[squadName] =
-              initStats();
-        }
-
-
-        if (
-          !memberMapBySquad[squadName]
-        ) {
-          memberMapBySquad[squadName] = {};
-        }
-
-
-        if (
-          !memberMapBySquad[squadName]
-            [assigneeName]
-        ) {
-          memberMapBySquad[squadName]
-            [assigneeName] =
-              initStats();
-        }
-
-
-        const parentStats =
-          parentMap[parentKey]
-            .squadMap[squadName];
-
-        const memberStats =
-          memberMapBySquad[squadName]
-            [assigneeName];
-
-
-        if (statusCategory === 'new') {
-          parentStats.todo++;
-          memberStats.todo++;
-        } else if (
-          statusCategory === 'indeterminate'
-        ) {
-          parentStats.inProgress++;
-          memberStats.inProgress++;
-        } else if (
-          statusCategory === 'done'
-        ) {
-          parentStats.done++;
-          memberStats.done++;
-        }
-
-
-        parentStats.total++;
-        memberStats.total++;
+      const chartData = Object.keys(parent.squadStats).map((squad) => {
+        const item = { name: squad, total: parent.squadStats[squad].total || 0 };
+        statusList.forEach((st) => {
+          item[st] = parent.squadStats[squad][st] || 0;
+        });
+        return item;
       });
 
-
-      const parentIssues =
-        Object.values(parentMap)
-          .map((item) => ({
-            key: item.key,
-            title: item.title,
-
-            chartData:
-              Object.keys(item.squadMap)
-                .map((sq) => ({
-                  name: sq,
-                  ...item.squadMap[sq],
-                })),
-          }));
-
-
-      const memberDataBySquad = {};
-
-
-      Object.keys(
-        memberMapBySquad
-      ).forEach((squad) => {
-        memberDataBySquad[squad] =
-          Object.keys(
-            memberMapBySquad[squad]
-          ).map((member) => ({
-            name: member,
-            ...memberMapBySquad[squad][member],
-          }));
+      const memberDataByCategory = {};
+      Object.keys(parent.memberStats).forEach((squad) => {
+        memberDataByCategory[squad] = Object.keys(parent.memberStats[squad]).map((member) => {
+          const item = { name: member, total: parent.memberStats[squad][member].total || 0 };
+          statusList.forEach((st) => {
+            item[st] = parent.memberStats[squad][member][st] || 0;
+          });
+          return item;
+        });
       });
 
+      const progressPercentage = parent.totalSubtasks > 0
+        ? Math.round((parent.completedSubtasks / parent.totalSubtasks) * 100)
+        : 0;
 
       return {
-        parentIssues,
-        squadsList:
-          Array.from(squadSet),
-        memberDataBySquad,
+        key: parent.key,
+        title: parent.title,
+        parentSummary: parent.parentSummary,
+        totalSubtasks: parent.totalSubtasks,
+        completedSubtasks: parent.completedSubtasks,
+        progressPercentage,
+        chartData,
+        memberDataByCategory,
       };
+    });
 
-    } catch (error) {
-      console.error(
-        '[Squad Report] Error:',
-        error
-      );
+    return {
+      parentIssues,
+      availableStatuses: statusList,
+    };
 
-      return {
-        parentIssues: [],
-        squadsList: [],
-        memberDataBySquad: {},
-      };
-    }
+  } catch (error) {
+    console.error('[Squad Report] Error:', error);
+    return {
+      parentIssues: [],
+      availableStatuses: [],
+    };
   }
-);
+});
 
 
 // ============================================================
-// 2. GET AI RECOMMENDATIONS
+// 2. GET PROJECT EPICS (FIXED API)
 // ============================================================
 
-resolver.define(
-  'getRecommendations',
-  async (req) => {
+resolver.define('getProjectEpics', async (req) => {
+  const { projectKey } = req.payload || {};
+  if (!projectKey) {
+    throw new Error('Project Key tidak ditemukan.');
+  }
 
-    const {
-      issueKey,
-    } = req.payload || {};
+  const jql = `project = "${projectKey}" AND issuetype = "Epic" ORDER BY created DESC`;
+  
+  const response = await api.asUser().requestJira(
+    route`/rest/api/3/search/jql`,
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        jql,
+        maxResults: 100,
+        fields: ['summary', 'status'],
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Gagal mengambil Epics: ${response.status} ${errText}`);
+  }
+
+  const data = await response.json();
+  const epics = (data.issues || []).map((issue) => ({
+    key: issue.key,
+    summary: issue.fields.summary,
+    status: issue.fields.status?.name || 'Unknown'
+  }));
+
+  return { epics };
+});
 
 
-    console.log(
-      '============================================================'
-    );
+// ============================================================
+// 3. GET EPIC STORY DETAILS & ROLE BREAKDOWN (FIXED API)
+// ============================================================
 
-    console.log(
-      '[AI Recommendation] START'
-    );
+resolver.define('getEpicStoryDetails', async (req) => {
+  const { epicKey, projectKey } = req.payload || {};
+  if (!epicKey) {
+    return { stories: [] };
+  }
 
-    console.log(
-      '[AI Recommendation] issueKey:',
-      issueKey
-    );
+  const storyJql = `project = "${projectKey}" AND (parent = "${epicKey}" OR "Epic Link" = "${epicKey}") ORDER BY key ASC`;
+  
+  const storyRes = await api.asUser().requestJira(
+    route`/rest/api/3/search/jql`,
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        jql: storyJql,
+        maxResults: 100,
+        fields: ['summary', 'status', 'issuetype'],
+      }),
+    }
+  );
+
+  if (!storyRes.ok) {
+    const errText = await storyRes.text();
+    throw new Error(`Gagal mengambil Story untuk Epic ${epicKey}: ${errText}`);
+  }
+
+  const storyData = await storyRes.json();
+  const stories = storyData.issues || [];
+
+  if (stories.length === 0) {
+    return { stories: [] };
+  }
+
+  const storyKeys = stories.map((s) => s.key);
+  const subtaskJql = `parent in (${storyKeys.map((k) => `"${k}"`).join(',')}) ORDER BY key ASC`;
+
+  const subtaskRes = await api.asUser().requestJira(
+    route`/rest/api/3/search/jql`,
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        jql: subtaskJql,
+        maxResults: 500,
+        fields: ['summary', 'status', 'parent', 'assignee'],
+      }),
+    }
+  );
+
+  let subtasks = [];
+  if (subtaskRes.ok) {
+    const subtaskData = await subtaskRes.json();
+    subtasks = subtaskData.issues || [];
+  }
+
+  const subtasksByStoryKey = {};
+  subtasks.forEach((st) => {
+    const parentKey = st.fields.parent?.key;
+    if (!parentKey) return;
+
+    if (!subtasksByStoryKey[parentKey]) {
+      subtasksByStoryKey[parentKey] = [];
+    }
+
+    const summary = st.fields.summary || '';
+    const assigneeName = st.fields.assignee?.displayName;
+    const role = extractSquadName(summary);
+
+    subtasksByStoryKey[parentKey].push({
+      key: st.key,
+      summary: st.fields.summary,
+      status: st.fields.status?.name || 'To Do',
+      role: role,
+      assignee: assigneeName || 'Unassigned'
+    });
+  });
+
+  const processedStories = stories.map((story) => {
+    const storySubtasks = subtasksByStoryKey[story.key] || [];
+
+    // Map dinamis: Hanya membuat entry untuk role yang benar-benar ada subtasknya
+    const roleMap = {};
+
+    storySubtasks.forEach((st) => {
+      if (!roleMap[st.role]) {
+        roleMap[st.role] = { name: st.role, total: 0 };
+      }
+      roleMap[st.role][st.status] = (roleMap[st.role][st.status] || 0) + 1;
+      roleMap[st.role].total += 1;
+    });
+
+    const roleChartData = Object.values(roleMap);
+    const availableRoles = Object.keys(roleMap); // Mengirim daftar role aktif saja
+
+    return {
+      key: story.key,
+      summary: story.fields.summary,
+      status: story.fields.status?.name || 'Unknown',
+      subtasks: storySubtasks,
+      roleChartData,
+      availableRoles
+    };
+  });
+
+  return { stories: processedStories };
+});
 
 
-    if (!issueKey) {
-      console.error(
-        '[AI Recommendation] issueKey kosong'
+// ============================================================
+// 4. GET AI RECOMMENDATIONS
+// ============================================================
+
+resolver.define('getRecommendations', async (req) => {
+  const { issueKey } = req.payload || {};
+
+  if (!issueKey) {
+    return [];
+  }
+
+  try {
+    const jiraResponse = await api
+      .asApp()
+      .requestJira(
+        route`/rest/api/3/issue/${issueKey}?fields=summary,description,subtasks`
       );
 
+    if (!jiraResponse.ok) {
       return [];
     }
 
-
-    try {
-
-      // ========================================================
-      // STEP 1 — GET JIRA ISSUE
-      // ========================================================
-
-      const jiraResponse =
-        await api
-          .asApp()
-          .requestJira(
-            route`/rest/api/3/issue/${issueKey}?fields=summary,description,subtasks`
-          );
-
-
-      if (!jiraResponse.ok) {
-
-        const errorText =
-          await jiraResponse.text();
-
-        console.error(
-          '[AI Recommendation] Jira error:',
-          jiraResponse.status,
-          errorText
-        );
-
-        return [];
-      }
-
-
-      const jiraData =
-        await jiraResponse.json();
-
-
-      const summary =
-        jiraData.fields?.summary ||
-        '';
-
-
-      const descriptionText =
-        extractTextFromADF(
-          jiraData.fields?.description
-        );
-
-
-      const existingSubtasks =
-        jiraData.fields?.subtasks ||
-        [];
-
-
-      console.log(
-        '[AI Recommendation] Summary:',
-        summary
-      );
-
-      console.log(
-        '[AI Recommendation] Description:',
-        descriptionText
-      );
-
-      console.log(
-        '[AI Recommendation] Existing subtasks:',
-        existingSubtasks.length
-      );
-
-
-      // ========================================================
-      // STEP 2 — FASTAPI
-      // ========================================================
-
-      const FASTAPI_URL =
-        'https://shaggy-books-check.loca.lt/api/v1/predict';
-
-      
-      console.log('========================================');
-      console.log('[DEBUG JIRA → FASTAPI]');
-      console.log('[DEBUG] issueKey:', issueKey);
-      console.log('[DEBUG] Summary:', summary);
-      console.log('[DEBUG] Description/AC:', descriptionText);
-      console.log('[DEBUG] Description length:', descriptionText.length);
-      console.log('========================================');
-
-
-      const requestBody = {
-        title:
-          summary,
-
-        ac_text:
-          descriptionText ||
-          summary,
-
-        parent_sp:
-          3.0,
-
-        members: [
-          {
-            pn: '001',
-            name: 'Developer Backend',
-            role: 'backend',
-          },
-
-          {
-            pn: '002',
-            name: 'Developer Frontend',
-            role: 'frontend',
-          },
-
-          {
-            pn: '003',
-            name: 'QA Engineer',
-            role: 'qa',
-          },
-        ],
-
-        selected_role:
-          'all',
-
-        parent_type:
-          'Story',
-      };
-
-      console.log(
-        '[DEBUG] Request Body:',
-        JSON.stringify(requestBody, null, 2)
-      );
-
-      console.log(
-        '[AI Recommendation] Calling FastAPI:',
-        FASTAPI_URL
-      );
-
-      console.log(
-        '[AI Recommendation] Request body:',
-        JSON.stringify(
-          requestBody,
-          null,
-          2
-        )
-      );
-
-
-      // ========================================================
-      // STEP 3 — REQUEST
-      // ========================================================
-
-      const pyResponse =
-        await fetch(
-          FASTAPI_URL,
-          {
-            method: 'POST',
-
-            headers: {
-              'Content-Type':
-                'application/json',
-
-              'bypass-tunnel-reminder':
-                'true',
-            },
-
-            body:
-              JSON.stringify(
-                requestBody
-              ),
-          }
-        );
-
-
-      // ========================================================
-      // STEP 4 — BACA RAW RESPONSE
-      // ========================================================
-
-      const responseText =
-        await pyResponse.text();
-
-
-      console.log(
-        '[AI Recommendation] FastAPI HTTP status:',
-        pyResponse.status
-      );
-
-
-      console.log(
-        '[AI Recommendation] FastAPI raw response:',
-        responseText
-      );
-
-
-      if (!pyResponse.ok) {
-
-        console.error(
-          '[AI Recommendation] FastAPI gagal:',
-          pyResponse.status,
-          responseText
-        );
-
-        return [];
-      }
-
-
-      // ========================================================
-      // STEP 5 — PARSE JSON
-      // ========================================================
-
-      let resJson;
-
-
-      try {
-
-        resJson =
-          JSON.parse(
-            responseText
-          );
-
-      } catch (error) {
-
-        console.error(
-          '[AI Recommendation] FastAPI response bukan JSON:',
-          error
-        );
-
-        return [];
-      }
-
-
-      console.log(
-        '[AI Recommendation] Parsed response:',
-        JSON.stringify(
-          resJson,
-          null,
-          2
-        )
-      );
-
-
-      // ========================================================
-      // STEP 6 — EXTRACT SUBTASKS
-      // ========================================================
-
-      const rawSubtasks =
-        extractSubtasksFromAIResponse(
-          resJson
-        );
-
-
-      console.log(
-        '[AI Recommendation] Raw subtasks count:',
-        rawSubtasks.length
-      );
-
-
-      if (
-        rawSubtasks.length === 0
-      ) {
-
-        console.warn(
-          '[AI Recommendation] FastAPI 200 tetapi tidak ada subtasks.'
-        );
-
-        return [];
-      }
-
-
-      // ========================================================
-      // STEP 7 — EXISTING SUBTASKS
-      // ========================================================
-
-      const existingCounts = {};
-
-
-      for (
-        const st of existingSubtasks
-      ) {
-
-        const existingSummary =
-          cleanText(
-            st.fields?.summary ||
-            ''
-          );
-
-
-        if (!existingSummary) {
-          continue;
-        }
-
-
-        existingCounts[
-          existingSummary
-        ] =
-          (
-            existingCounts[
-              existingSummary
-            ] || 0
-          ) + 1;
-      }
-
-
-      // ========================================================
-      // STEP 8 — NORMALIZE
-      // ========================================================
-
-      const normalizedTasks =
-        rawSubtasks
-          .map((task, index) => {
-
-            let role =
-              'backend';
-
-
-            if (
-              typeof task === 'object'
-            ) {
-
-              role =
-                task?.role ||
-                task?.category ||
-                task?.team ||
-                'backend';
-            }
-
-
-            const category =
-              normalizeCategory(
-                role
-              );
-
-
-            return normalizeTask(
-              task,
-              index,
-              category
-            );
-          })
-          .filter(
-            (task) =>
-              task.text &&
-              task.text.trim()
-          );
-
-
-      console.log(
-        '[AI Recommendation] Normalized tasks:',
-        JSON.stringify(
-          normalizedTasks,
-          null,
-          2
-        )
-      );
-
-
-      // ========================================================
-      // STEP 9 — FILTER DUPLICATE
-      // ========================================================
-
-      const remainingTasks = [];
-
-      const counts = {
-        ...existingCounts,
-      };
-
-
-      for (
-        const task of normalizedTasks
-      ) {
-
-        const taskClean =
-          cleanText(
-            task.text
-          );
-
-
-        if (
-          counts[taskClean] &&
-          counts[taskClean] > 0
-        ) {
-
-          counts[taskClean]--;
-
-          console.log(
-            '[AI Recommendation] Existing task skipped:',
-            task.text
-          );
-
-        } else {
-
-          remainingTasks.push(
-            task
-          );
-        }
-      }
-
-
-      // ========================================================
-      // STEP 10 — CONVERT TO GROUPS
-      // ========================================================
-
-      const groups =
-        convertSubtasksToGroups(
-          remainingTasks
-        );
-
-
-      console.log(
-        '[AI Recommendation] Remaining task count:',
-        remainingTasks.length
-      );
-
-
-      console.log(
-        '[AI Recommendation] FINAL GROUPS:',
-        JSON.stringify(
-          groups,
-          null,
-          2
-        )
-      );
-
-
-      console.log(
-        '[AI Recommendation] END'
-      );
-
-
-      return groups;
-
-    } catch (error) {
-
-      console.error(
-        '[AI Recommendation] ERROR:',
-        error
-      );
-
-      console.error(
-        '[AI Recommendation] STACK:',
-        error?.stack
-      );
-
+    const jiraData = await jiraResponse.json();
+
+    const summary = jiraData.fields?.summary || '';
+    const descriptionText = extractTextFromADF(jiraData.fields?.description);
+    const existingSubtasks = jiraData.fields?.subtasks || [];
+
+    const FASTAPI_URL = 'https://every-showers-clean.loca.lt/api/v1/predict';
+
+    const requestBody = {
+      title: summary,
+      ac_text: descriptionText || summary,
+      parent_sp: 3.0,
+      members: [
+        { pn: '001', name: 'Developer Backend', role: 'backend' },
+        { pn: '002', name: 'Developer Frontend', role: 'frontend' },
+        { pn: '003', name: 'QA Engineer', role: 'qa' },
+      ],
+      selected_role: 'all',
+      parent_type: 'Story',
+    };
+
+    const pyResponse = await fetch(FASTAPI_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'bypass-tunnel-reminder': 'true',
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    const responseText = await pyResponse.text();
+
+    if (!pyResponse.ok) {
       return [];
     }
-  }
-);
 
-
-// ============================================================
-// 3. CREATE SUBTASKS
-// ============================================================
-
-resolver.define(
-  'createSubtasks',
-  async (req) => {
-
-    const {
-      issueKey,
-      subtasks,
-    } = req.payload || {};
-
-
-    console.log(
-      '[Create Subtasks] issueKey:',
-      issueKey
-    );
-
-    console.log(
-      '[Create Subtasks] subtasks:',
-      JSON.stringify(
-        subtasks,
-        null,
-        2
-      )
-    );
-
-
-    if (
-      !issueKey ||
-      !Array.isArray(subtasks) ||
-      subtasks.length === 0
-    ) {
-
-      return {
-        success: false,
-        error:
-          'Data tidak lengkap',
-      };
-    }
-
-
+    let resJson;
     try {
-
-      // ========================================================
-      // GET ISSUE
-      // ========================================================
-
-      const issueResponse =
-        await api
-          .asApp()
-          .requestJira(
-            route`/rest/api/3/issue/${issueKey}?fields=project`
-          );
-
-
-      if (!issueResponse.ok) {
-
-        const errorText =
-          await issueResponse.text();
-
-        return {
-          success: false,
-
-          error:
-            `Gagal mengambil issue: ${errorText}`,
-        };
-      }
-
-
-      const issueData =
-        await issueResponse.json();
-
-
-      const projectId =
-        issueData.fields?.project?.id;
-
-
-      if (!projectId) {
-
-        return {
-          success: false,
-          error:
-            'Project ID tidak ditemukan',
-        };
-      }
-
-
-      // ========================================================
-      // GET PROJECT ISSUE TYPES
-      // ========================================================
-
-      const projectResponse =
-        await api
-          .asApp()
-          .requestJira(
-            route`/rest/api/3/project/${projectId}`
-          );
-
-
-      if (!projectResponse.ok) {
-
-        const errorText =
-          await projectResponse.text();
-
-        return {
-          success: false,
-
-          error:
-            `Gagal mengambil project: ${errorText}`,
-        };
-      }
-
-
-      const projectData =
-        await projectResponse.json();
-
-
-      const subtaskType =
-        (
-          projectData.issueTypes ||
-          []
-        ).find(
-          (type) =>
-            type.subtask === true
-        );
-
-
-      if (!subtaskType) {
-
-        return {
-          success: false,
-
-          error:
-            'Subtask issue type tidak ditemukan',
-        };
-      }
-
-
-      // ========================================================
-      // CREATE SUBTASKS
-      // ========================================================
-
-      const results = [];
-
-
-      for (
-        const rawTask of subtasks
-      ) {
-
-        let taskText;
-
-
-        if (
-          typeof rawTask === 'string'
-        ) {
-
-          taskText =
-            rawTask.trim();
-
-        } else {
-
-          taskText =
-            String(
-              rawTask?.text ||
-              rawTask?.summary ||
-              ''
-            ).trim();
-        }
-
-
-        if (!taskText) {
-          continue;
-        }
-
-
-        const bodyData = {
-          fields: {
-
-            summary:
-              taskText,
-
-            project: {
-              id: projectId,
-            },
-
-            parent: {
-              key: issueKey,
-            },
-
-            issuetype: {
-              id: subtaskType.id,
-            },
-
-          },
-        };
-
-
-        console.log(
-          '[Create Subtasks] Creating:',
-          taskText
-        );
-
-
-        const createResponse =
-          await api
-            .asApp()
-            .requestJira(
-              route`/rest/api/3/issue`,
-              {
-                method: 'POST',
-
-                headers: {
-                  Accept:
-                    'application/json',
-
-                  'Content-Type':
-                    'application/json',
-                },
-
-                body:
-                  JSON.stringify(
-                    bodyData
-                  ),
-              }
-            );
-
-
-        if (
-          createResponse.status === 201
-        ) {
-
-          const created =
-            await createResponse.json();
-
-
-          results.push({
-            success: true,
-            key: created.key,
-            summary: taskText,
-          });
-
-
-          console.log(
-            '[Create Subtasks] SUCCESS:',
-            created.key
-          );
-
-        } else {
-
-          const errorText =
-            await createResponse.text();
-
-
-          console.error(
-            '[Create Subtasks] FAILED:',
-            errorText
-          );
-
-
-          results.push({
-            success: false,
-            error: errorText,
-            summary: taskText,
-          });
-        }
-      }
-
-
-      const createdKeys =
-        results
-          .filter(
-            (item) =>
-              item.success
-          )
-          .map(
-            (item) =>
-              item.key
-          );
-
-
-      return {
-        success:
-          createdKeys.length > 0,
-
-        createdKeys,
-
-        results,
-      };
-
+      resJson = JSON.parse(responseText);
     } catch (error) {
+      return [];
+    }
 
-      console.error(
-        '[Create Subtasks] ERROR:',
-        error
-      );
+    const rawSubtasks = extractSubtasksFromAIResponse(resJson);
+
+    if (rawSubtasks.length === 0) {
+      return [];
+    }
+
+    const existingCounts = {};
+    for (const st of existingSubtasks) {
+      const existingSummary = cleanText(st.fields?.summary || '');
+      if (!existingSummary) continue;
+      existingCounts[existingSummary] = (existingCounts[existingSummary] || 0) + 1;
+    }
+
+    const normalizedTasks = rawSubtasks
+      .map((task, index) => {
+        let role = 'backend';
+        if (typeof task === 'object') {
+          role = task?.role || task?.category || task?.team || 'backend';
+        }
+        const category = normalizeCategory(role);
+        return normalizeTask(task, index, category);
+      })
+      .filter((task) => task.text && task.text.trim());
+
+    const remainingTasks = [];
+    const counts = { ...existingCounts };
+
+    for (const task of normalizedTasks) {
+      const taskClean = cleanText(task.text);
+      if (counts[taskClean] && counts[taskClean] > 0) {
+        counts[taskClean]--;
+      } else {
+        remainingTasks.push(task);
+      }
+    }
+
+    return convertSubtasksToGroups(remainingTasks);
+
+  } catch (error) {
+    return [];
+  }
+});
 
 
+// ============================================================
+// 5. CREATE SUBTASKS
+// ============================================================
+
+resolver.define('createSubtasks', async (req) => {
+  const { issueKey, subtasks } = req.payload || {};
+
+  if (!issueKey || !Array.isArray(subtasks) || subtasks.length === 0) {
+    return {
+      success: false,
+      error: 'Data tidak lengkap',
+    };
+  }
+
+  try {
+    const issueResponse = await api
+      .asApp()
+      .requestJira(route`/rest/api/3/issue/${issueKey}?fields=project`);
+
+    if (!issueResponse.ok) {
+      const errorText = await issueResponse.text();
       return {
         success: false,
-
-        error:
-          error?.message ||
-          String(error),
+        error: `Gagal mengambil issue: ${errorText}`,
       };
     }
+
+    const issueData = await issueResponse.json();
+    const projectId = issueData.fields?.project?.id;
+
+    if (!projectId) {
+      return {
+        success: false,
+        error: 'Project ID tidak ditemukan',
+      };
+    }
+
+    const projectResponse = await api
+      .asApp()
+      .requestJira(route`/rest/api/3/project/${projectId}`);
+
+    if (!projectResponse.ok) {
+      const errorText = await projectResponse.text();
+      return {
+        success: false,
+        error: `Gagal mengambil project: ${errorText}`,
+      };
+    }
+
+    const projectData = await projectResponse.json();
+    const subtaskType = (projectData.issueTypes || []).find(
+      (type) => type.subtask === true
+    );
+
+    if (!subtaskType) {
+      return {
+        success: false,
+        error: 'Subtask issue type tidak ditemukan',
+      };
+    }
+
+    const results = [];
+
+    for (const rawTask of subtasks) {
+      let taskText;
+      if (typeof rawTask === 'string') {
+        taskText = rawTask.trim();
+      } else {
+        taskText = String(rawTask?.text || rawTask?.summary || '').trim();
+      }
+
+      if (!taskText) continue;
+
+      const bodyData = {
+        fields: {
+          summary: taskText,
+          project: {
+            id: projectId,
+          },
+          parent: {
+            key: issueKey,
+          },
+          issuetype: {
+            id: subtaskType.id,
+          },
+        },
+      };
+
+      const createResponse = await api
+        .asApp()
+        .requestJira(route`/rest/api/3/issue`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(bodyData),
+        });
+
+      if (createResponse.status === 201) {
+        const created = await createResponse.json();
+        results.push({
+          success: true,
+          key: created.key,
+          summary: taskText,
+        });
+      } else {
+        const errorText = await createResponse.text();
+        results.push({
+          success: false,
+          error: errorText,
+          summary: taskText,
+        });
+      }
+    }
+
+    const createdKeys = results
+      .filter((item) => item.success)
+      .map((item) => item.key);
+
+    return {
+      success: createdKeys.length > 0,
+      createdKeys,
+      results,
+    };
+
+  } catch (error) {
+    return {
+      success: false,
+      error: error?.message || String(error),
+    };
   }
-);
+});
 
 
 // ============================================================
 // EXPORT
 // ============================================================
 
-export const handler =
-  resolver.getDefinitions();
+export const handler = resolver.getDefinitions();
