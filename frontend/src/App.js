@@ -124,10 +124,16 @@ function App() {
         return;
       }
 
-      setGroups(data);
+      // PERBAIKAN 1: Pastikan setiap grup memiliki ID unik agar tidak ada duplikasi index
+      const processedData = data.map((group, index) => ({
+        ...group,
+        id: group.id || `group-${Date.now()}-${index}`
+      }));
+
+      setGroups(processedData);
       setHasGenerated(true);
 
-      const total = data.reduce(
+      const total = processedData.reduce(
         (acc, group) => acc + (Array.isArray(group.tasks) ? group.tasks.length : 0),
         0
       );
@@ -150,10 +156,10 @@ function App() {
     }
   };
 
-  const handleRemoveTask = (groupIndex, taskId) => {
+  const handleRemoveTask = (groupId, taskId) => {
     setGroups((prev) =>
-      prev.map((group, gIdx) => {
-        if (gIdx !== groupIndex) return group;
+      prev.map((group) => {
+        if (group.id !== groupId) return group;
         return {
           ...group,
           tasks: (group.tasks || []).filter((task) => task.id !== taskId),
@@ -162,7 +168,7 @@ function App() {
     );
   };
 
-  const handleAddSingle = async (groupIndex, task) => {
+  const handleAddSingle = async (groupId, task) => {
     if (!issueKey) return;
 
     const taskText = task.text || task.summary || '';
@@ -183,7 +189,7 @@ function App() {
       });
 
       if (res?.success) {
-        handleRemoveTask(groupIndex, task.id);
+        handleRemoveTask(groupId, task.id);
         setStatusType('success');
         setStatusMsg(`Sub-task "${taskText}" berhasil ditambahkan ke ${issueKey}.`);
       } else {
@@ -199,20 +205,27 @@ function App() {
     }
   };
 
-  const handleAddAllCategory = async (groupIndex) => {
+  const handleAddAllCategory = async (groupId) => {
     if (!issueKey) return;
 
-    const group = groups[groupIndex];
+    const group = groups.find((g) => g.id === groupId);
     if (!group || !Array.isArray(group.tasks) || group.tasks.length === 0) return;
 
     const tasks = group.tasks;
-    setLoadingText(`Membuat ${tasks.length} sub-task ${group.category}...`);
-    setLoading(true);
-    setStatusMsg('');
-
     const subtaskTexts = tasks
       .map((task) => task.text || task.summary || '')
       .filter((text) => text.trim());
+
+    // PERBAIKAN 2: Cek jika array subtask kosong setelah di-filter
+    if (subtaskTexts.length === 0) {
+      setStatusType('warning');
+      setStatusMsg('Tidak ada sub-task dengan teks valid yang bisa dibuat.');
+      return;
+    }
+
+    setLoadingText(`Membuat ${subtaskTexts.length} sub-task ${group.category}...`);
+    setLoading(true);
+    setStatusMsg('');
 
     try {
       const res = await invoke('createSubtasks', {
@@ -221,9 +234,10 @@ function App() {
       });
 
       if (res?.success) {
+        // Hapus task di grup tersebut dari state UI karena sudah ditambahkan ke Jira
         setGroups((prev) =>
-          prev.map((g, idx) =>
-            idx === groupIndex
+          prev.map((g) =>
+            g.id === groupId
               ? { ...g, tasks: [] }
               : g
           )
@@ -293,8 +307,7 @@ function App() {
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor:
-              'var(--ds-surface-overlay, rgba(255,255,255,0.88))',
+            backgroundColor: 'var(--ds-surface-overlay, rgba(255,255,255,0.88))',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
@@ -470,16 +483,13 @@ function App() {
               Tidak ada rekomendasi sub-task untuk role ini.
             </div>
           ) : (
-            filteredGroups.map((group, groupIdx) => {
-              const originalGroupIdx = groups.findIndex(
-                (g) => g.category === group.category
-              );
-              const activeIndex =
-                originalGroupIdx !== -1 ? originalGroupIdx : groupIdx;
-
+            filteredGroups.map((group) => {
+              // PERBAIKAN 1: Tidak perlu lagi menggunakan .findIndex untuk mencari original group index.
+              // Kita sekarang sepenuhnya berpatokan pada group.id yang unik.
+              
               return (
                 <div
-                  key={`${group.category || 'cat'}-${groupIdx}`}
+                  key={group.id}
                   style={{
                     marginBottom: '14px',
                     border: '1px solid var(--ds-border, #EBECF0)',
@@ -522,8 +532,7 @@ function App() {
                           fontSize: '10px',
                           fontWeight: 600,
                           color: 'var(--ds-text-subtle, #5E6C84)',
-                          backgroundColor:
-                            'var(--ds-background-neutral-subtle, #EBECF0)',
+                          backgroundColor: 'var(--ds-background-neutral-subtle, #EBECF0)',
                           padding: '1px 6px',
                           borderRadius: '10px',
                         }}
@@ -538,7 +547,7 @@ function App() {
                         !group.tasks ||
                         group.tasks.length === 0
                       }
-                      onClick={() => handleAddAllCategory(activeIndex)}
+                      onClick={() => handleAddAllCategory(group.id)}
                       style={{
                         border: 'none',
                         backgroundColor:
@@ -597,8 +606,7 @@ function App() {
                             fontSize: '12px',
                             padding: '4px 6px',
                             borderRadius: '3px',
-                            backgroundColor:
-                              'var(--ds-surface-subtle, transparent)',
+                            backgroundColor: 'var(--ds-surface-subtle, transparent)',
                           }}
                         >
                           <div
@@ -610,9 +618,7 @@ function App() {
                             }}
                           >
                             <span
-                              onClick={() =>
-                                handleRemoveTask(activeIndex, task.id)
-                              }
+                              onClick={() => handleRemoveTask(group.id, task.id)}
                               style={{
                                 color: 'var(--ds-text-danger, #DE350B)',
                                 cursor: 'pointer',
@@ -640,13 +646,10 @@ function App() {
 
                           <button
                             disabled={loading}
-                            onClick={() =>
-                              handleAddSingle(activeIndex, task)
-                            }
+                            onClick={() => handleAddSingle(group.id, task)}
                             style={{
                               border: 'none',
-                              backgroundColor:
-                                'var(--ds-background-neutral, #DFE1E6)',
+                              backgroundColor: 'var(--ds-background-neutral, #DFE1E6)',
                               color: 'var(--ds-text, #42526E)',
                               fontSize: '10px',
                               fontWeight: 600,
