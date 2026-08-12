@@ -1,6 +1,6 @@
 import math
 import re
-from typing import List
+from typing import List, Optional
 from modules.generate_subtask.domain.models import Subtask
 from modules.generate_subtask.domain.interfaces import IStoryRepository, ILlmClient
 
@@ -33,10 +33,88 @@ class GenerateSubtasksUseCase:
         13.0: 4,
     }
 
+    @staticmethod
+    def chunk_ac_text(description: str) -> List[dict]:
+        """
+        Decomposes raw Acceptance Criteria (AC) text into discrete, structured AC chunks.
+        Splits by line breaks, numbered items (1., 2.), lettered lists (a., b.), bullet points (- , *),
+        and section headers (BE -, WEB -, Mobile -, Penambahan Sub Menu:).
+        """
+        if not description or not description.strip():
+            return []
+
+        raw_text = description.strip()
+
+        # Split by newlines first to honor distinct AC lines, then by bullet/number markers
+        lines = [ln.strip() for ln in re.split(r'[\r\n]+', raw_text) if ln and ln.strip()]
+        raw_items = []
+        split_pattern = r'(?=\b(?:\d+[\.\)]|[a-z][\.\)]|[\-\*•])\s+)|(?=\b(?:BE|WEB|Mobile)\s*-\s*)'
+        for line in lines:
+            sub_items = [item.strip() for item in re.split(split_pattern, line) if item and item.strip()]
+            if sub_items:
+                raw_items.extend(sub_items)
+            else:
+                raw_items.append(line)
+
+        chunks = []
+        for idx, item in enumerate(raw_items, start=1):
+            clean_item = re.sub(r'^(?:\d+[\.\)]|[a-z][\.\)]|[\-\*•])\s*', '', item).strip()
+            if not clean_item or len(clean_item) < 3:
+                continue
+
+            item_lower = clean_item.lower()
+
+            # Accurate Frontend indicators
+            has_web = any(kw in item_lower for kw in [
+                "web", "tampilan", "ui ", " ui", "screen", "view", "form", "tab", "list",
+                "menu", "component", "komponen", "modal", "page", "halaman", "button",
+                "radio", "fe ", "monitoring", "tabel", "table", "menampilkan", "display"
+            ])
+
+            # Accurate Backend indicators (only flag as BE if explicit backend/DB terms appear)
+            has_be = any(kw in item_lower for kw in [
+                "be ", "backend", "endpoint", "api", "service", "query", "database",
+                "insert", "inquiry", "function general", "cekdata", "mst_", "db ", " db"
+            ]) or ("kolom" in item_lower and any(db_kw in item_lower for db_kw in ["mst_", "database", "db", "tabel "]))
+
+            # Disambiguate: "menampilkan kolom pada monitoring" is 100% Frontend
+            if has_web and ("menampilkan" in item_lower or "monitoring" in item_lower) and not any(db_kw in item_lower for db_kw in ["mst_", "endpoint", "api", "query"]):
+                has_be = False
+
+            has_mobile = any(kw in item_lower for kw in ["mobile", "brispot", "layout", "activity", "android", "ios", "prescreening"])
+
+            role_hint = "backend" if has_be and not has_web else "frontend" if has_web and not has_be else "mobile" if has_mobile else "general"
+
+            chunks.append({
+                "chunk_id": idx,
+                "raw_text": item,
+                "clean_text": clean_item,
+                "role_hint": role_hint,
+                "has_be": has_be,
+                "has_web": has_web,
+                "has_mobile": has_mobile,
+            })
+
+        return chunks
+
     def execute(
-        self, summary: str, description: str, parent_sp: float, mode: str = "free"
+        self,
+        summary: str,
+        description: str,
+        parent_sp: float,
+        mode: str = "free",
+        existing_subtasks: List[str] = None,
+        issue_key: Optional[str] = None,
     ) -> List[Subtask]:
         summary_lower = summary.lower()
+
+        # Perform AC Chunking to break AC into structured items for precise RAG and LLM processing
+        ac_chunks = self.chunk_ac_text(description)
+        if ac_chunks:
+            chunk_summary_text = "\n".join([f"- CHUNK {c['chunk_id']} [{c['role_hint'].upper()}]: {c['clean_text']}" for c in ac_chunks])
+            formatted_description = f"{description}\n\nSTRUCTURED AC CHUNKS:\n{chunk_summary_text}"
+        else:
+            formatted_description = description
 
         # Exception Rule: Exclude Test & Deployment tickets from subtask generation as requested
         skip_test_keywords = [
@@ -102,38 +180,69 @@ class GenerateSubtasksUseCase:
             ]
 
         # 1. Generate query embedding combining summary & description for accurate RAG match
-        search_text = f"{summary}\n{description}".strip()
+        search_text = f"{summary}\n{formatted_description}".strip()
         target_embedding = self.llm_client.get_text_embedding(search_text)
 
         # 2. Retrieve all historical stories from SQLite RAG database
         historical_stories = self.story_repo.get_all()
 
-        # 3. Calculate similarities to find closest reference matches
+        def _normalize_str(s: str) -> str:
+            cleaned = str(s or '')
+            cleaned = re.sub(r'^\[.*?\]\s*', '', cleaned)  # Strip [BL-38813] prefix if present
+            return re.sub(r'\s+', ' ', cleaned).strip().lower()
+
+        req_title_norm = _normalize_str(summary)
+
         candidate_stories = []
-        for story in historical_stories:
-            similarity_score = self._cosine_similarity(
-                target_embedding, story["embedding"]
-            )
-            reference_candidate = story.copy()
-            reference_candidate["similarity"] = similarity_score
-            candidate_stories.append(reference_candidate)
-
-        # Sort descending by similarity score
+        for s in historical_stories:
+            if s.get("embedding"):
+                s["similarity"] = self._cosine_similarity(target_embedding, s["embedding"])
+                candidate_stories.append(s)
         candidate_stories.sort(key=lambda x: x["similarity"], reverse=True)
-        top_match = candidate_stories[0] if candidate_stories else None
 
-        # Ultra-Strict 1-to-1 Exact Match Cloning ("Plek Ketiplek Sama" Judul & AC)
+        # Priority 1: Check for 100% Full Issue Key Match in DB
+        exact_key_match = None
+        if issue_key:
+            clean_ikey = issue_key.strip().upper()
+            exact_key_match = next((s for s in historical_stories if s.get("issue_key") and s.get("issue_key").strip().upper() == clean_ikey), None)
+
+        if not exact_key_match:
+            exact_key_match = next(
+                (s for s in historical_stories if s.get("issue_key") and (
+                    s.get("issue_key").strip().upper() == summary.strip().upper() or
+                    f"[{s.get('issue_key', '').strip().upper()}]" in summary.upper() or
+                    f" {s.get('issue_key', '').strip().upper()} " in f" {summary.upper()} "
+                )), None
+            )
+        exact_title_match = next((s for s in historical_stories if req_title_norm and req_title_norm == _normalize_str(s.get("summary"))), None)
+
+        top_match = exact_key_match or exact_title_match
+
+        # Priority 2: Fallback to vector similarity top match if no exact key/title match
+        if not top_match:
+            top_match = candidate_stories[0] if candidate_stories else None
+
+        # Ultra-Strict 1-to-1 Exact Match Cloning ("Plek Ketiplek Sama" Judul, Key, atau AC)
         def _normalize_str(s: str) -> str:
             return re.sub(r'\s+', ' ', str(s or '')).strip().lower()
 
+        clean_req_title = _normalize_str(summary)
+        clean_db_title = _normalize_str(top_match.get("summary", "")) if top_match else ""
+
+        is_exact_key_match = bool(exact_key_match)
         is_exact_title_match = (
-            top_match and _normalize_str(summary) == _normalize_str(top_match["summary"])
+            top_match and (
+                clean_req_title == clean_db_title or
+                clean_req_title in clean_db_title or
+                clean_db_title in clean_req_title or
+                (top_match.get("issue_key") and top_match.get("issue_key", "").upper() in summary.upper())
+            )
         )
         is_exact_desc_match = (
-            top_match and _normalize_str(description) == _normalize_str(top_match["description"])
+            top_match and _normalize_str(description) == _normalize_str(top_match.get("description", ""))
         )
 
-        is_plek_ketiplek_match = is_exact_title_match and is_exact_desc_match
+        is_plek_ketiplek_match = is_exact_key_match or is_exact_title_match or is_exact_desc_match
 
         if top_match and is_plek_ketiplek_match:
             cloned_subtasks = []
@@ -145,23 +254,91 @@ class GenerateSubtasksUseCase:
                 if re.search(r'\breview\b.*(code|design|figma|existing|mab)', summary_lower) or summary_lower.startswith("review "):
                     continue
 
-                # Normalize legacy FE - or WEBAPP - to WEB -
-                summary_text = re.sub(r'^(fe|webapp)\s*-\s*', 'WEB - ', summary_text, flags=re.IGNORECASE)
+                # Clean all leading role prefixes (BE -, WEB -, FE -, WEBAPP -, Mobile -, etc.) completely
+                clean_body = re.sub(r'^((be|web|fe|webapp|mobile)\s*-\s*)+', '', summary_text, flags=re.IGNORECASE).strip()
+
+                # Normalize role: 'developer' -> 'backend', 'fe'/'web' -> 'frontend'
+                raw_role = str(sub.get("role", "backend")).lower()
+                if raw_role in ("developer", "backend", "be"):
+                    normalized_role = "backend"
+                elif raw_role in ("frontend", "web", "fe"):
+                    normalized_role = "frontend"
+                elif raw_role == "mobile":
+                    normalized_role = "mobile"
+                else:
+                    # Infer from prefix if role is unrecognized
+                    normalized_role = "frontend" if summary_text.upper().startswith("WEB -") else "backend"
+
+                # --- Backend override: correct stale/wrong roles saved in the DB ---
+                # The DB may contain subtasks where "Create New Endpoint", "Enhance Endpoint",
+                # or API-related tasks were stored with role=frontend. We detect these via keywords
+                # and force them back to backend so they land with the right developer.
+                _backend_kw = [
+                    "migration", "database migration",
+                    "db schema", "tabel database", "kolom database",
+                    "repository", "controller",
+                    "stored procedure", "cekdata", "function general",
+                    "insert into", "select from",
+                ]
+                if normalized_role in ("frontend", "mobile"):
+                    if any(kw in clean_body.lower() for kw in _backend_kw):
+                        normalized_role = "backend"
+
+                # Build final prefix from the resolved (possibly overridden) role
+                if normalized_role == "frontend":
+                    role_prefix = "WEB - "
+                elif normalized_role == "mobile":
+                    role_prefix = "Mobile - "
+                else:
+                    role_prefix = "BE - "
+                summary_text = f"{role_prefix}{clean_body}"
 
                 cloned_subtasks.append(
                     Subtask(
                         summary=summary_text,
                         description="",
-                        role=sub["role"],
+                        role=normalized_role,
                         story_points=sub["story_points"],
                     )
                 )
             if cloned_subtasks:
+                # If existing_subtasks already exist in Jira, filter them out so we return only the missing subtasks!
+                if existing_subtasks and len(existing_subtasks) > 0:
+                    existing_norm = {re.sub(r'^((be|web|fe|webapp|mobile)\s*-\s*)+', '', s, flags=re.IGNORECASE).strip().lower() for s in existing_subtasks}
+                    cloned_subtasks = [
+                        s for s in cloned_subtasks
+                        if re.sub(r'^((be|web|fe|webapp|mobile)\s*-\s*)+', '', s.summary, flags=re.IGNORECASE).strip().lower() not in existing_norm
+                    ]
+
+                db_naming_patterns = self._extract_naming_patterns(candidate_stories[:10])
+                
+                # Check for any remaining custom AC not covered yet
+                all_known_subs = cloned_subtasks + ([Subtask(summary=s, description="", role="backend", story_points=1.0) for s in existing_subtasks] if existing_subtasks else [])
+                gap_subtasks = self.llm_client.fill_gaps_from_ac(
+                    summary=summary,
+                    description=formatted_description,
+                    cloned_subtasks=all_known_subs,
+                    db_patterns=db_naming_patterns,
+                )
+                if gap_subtasks:
+                    cloned_subtasks.extend(gap_subtasks)
+
+                # Mobile subtasks are valid when the story mentions BRISpot mobile roles
+                _mobile_kw = [
+                    "pemrakarsa", "pemutus",
+                    "mobile", "mobile app", "brispot", "android", "ios", "aplikasi",
+                ]
+                has_mobile_ctx = any(
+                    kw in (summary + " " + (description or "")).lower() for kw in _mobile_kw
+                )
+                if not has_mobile_ctx:
+                    cloned_subtasks = [s for s in cloned_subtasks if s.role != "mobile"]
+                
                 return cloned_subtasks
             # All cloned subtasks were filtered as noise — fallback to AI synthesis
-            print("   [INFO] Semua subtask dari DB adalah noise, fallback ke Gemini AI...")
+            print("   [INFO] Semua subtask dari DB adalah noise, fallback ke AI synthesis...")
 
-        selected_references = candidate_stories[:5]
+        selected_references = candidate_stories[:2]
 
         # Extract real naming patterns from DB to guide AI style dynamically
         db_naming_patterns = self._extract_naming_patterns(candidate_stories[:10])
@@ -169,47 +346,51 @@ class GenerateSubtasksUseCase:
         # Resolve target subtask count for strict mode from SP table
         target_subtasks = None
         if mode == "strict":
-            # Find closest SP key in table
-            sp_key = min(self.SP_SUBTASK_LIMIT.keys(), key=lambda k: abs(k - parent_sp))
+            effective_sp = parent_sp if (parent_sp and parent_sp > 0) else 3.0
+            sp_key = min(self.SP_SUBTASK_LIMIT.keys(), key=lambda k: abs(k - effective_sp))
             target_subtasks = self.SP_SUBTASK_LIMIT[sp_key]
 
-        # 4. Generate structured subtasks using Gemini LLM Client
-        generated_subtasks = self.llm_client.generate_subtasks_from_ac(
-            summary=summary,
-            description=description,
-            parent_sp=parent_sp,
-            examples=selected_references,
-            db_patterns=db_naming_patterns,
-            mode=mode,
-            max_subtasks=target_subtasks,
-        )
+        # 4. Generate structured subtasks using LLM Client
+        if existing_subtasks and len(existing_subtasks) > 0:
+            existing_objs = [Subtask(summary=s, description="", role="backend", story_points=1.0) for s in existing_subtasks]
+            generated_subtasks = self.llm_client.fill_gaps_from_ac(
+                summary=summary,
+                description=formatted_description,
+                cloned_subtasks=existing_objs,
+                db_patterns=db_naming_patterns,
+            )
+        else:
+            generated_subtasks = self.llm_client.generate_subtasks_from_ac(
+                summary=summary,
+                description=formatted_description,
+                parent_sp=parent_sp,
+                examples=selected_references,
+                db_patterns=db_naming_patterns,
+                mode=mode,
+                max_subtasks=target_subtasks,
+            )
 
         # Enforce exact count for strict mode — trim to exactly target_subtasks
         if mode == "strict" and target_subtasks:
             generated_subtasks = generated_subtasks[:target_subtasks]
 
-        # Post-process: sanitize BE subtask names and enforce 'Enhance endpoint' rule when AC has no BE details
+        # Post-process: mobile context guard + general sanitization
         ac_text = (summary + " " + (description or "")).lower()
-        be_keywords = ["backend", "be ", "database", "db ", "tabel database", "kolom", "endpoint", "api", "query", "migration", "payload", "controller"]
-        has_be_in_ac = any(kw in ac_text for kw in be_keywords)
+
+        # Mobile subtasks are valid when the story mentions BRISpot mobile roles
+        # ('pemrakarsa'/'pemutus') OR mobile/app-related platform terms.
+        # NOTE: 'app' excluded — it's a substring of 'mapping' causing false positives.
+        mobile_context_keywords = [
+            "pemrakarsa", "pemutus",
+            "mobile", "mobile app", "brispot", "android", "ios", "aplikasi",
+        ]
+        has_mobile_context = any(kw in ac_text for kw in mobile_context_keywords)
 
         filtered_subtasks = []
-        be_generic_added = False
-
         for sub in generated_subtasks:
-            sub_role = sub.role.lower()
-            is_be = sub_role in ["be", "backend"]
-
-            if is_be and not has_be_in_ac:
-                # AC has no BE detail — only allow 1 generic 'Enhance endpoint' subtask; drop all invented specifics
-                if not be_generic_added:
-                    sub.summary = f"BE - Design Spec API for {summary}"
-                    sub.story_points = 2.0
-                    filtered_subtasks.append(sub)
-                    be_generic_added = True
-                # skip any additional invented BE subtasks
+            # Drop hallucinated Mobile subtasks when the story has no mobile context
+            if sub.role == "mobile" and not has_mobile_context:
                 continue
-
             filtered_subtasks.append(sub)
 
         return filtered_subtasks if filtered_subtasks else generated_subtasks

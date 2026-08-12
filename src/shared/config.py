@@ -8,6 +8,11 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "gemini-embedding-001"
     GENERATION_MODEL: str = "gemini-2.5-flash"
 
+    # OpenAI Configuration
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini")
+
 
 
     JIRA_URL: str = os.getenv("JIRA_URL", "https://your-domain.atlassian.net")

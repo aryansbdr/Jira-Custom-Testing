@@ -97,8 +97,13 @@ class WorkloadBalancerService:
                 )
 
                 blk_sp = sum(s.story_points for s in blk)
+                emp_info = employee_loads[selected_pn]["employee"]
                 for sub in blk:
-                    employee_loads[selected_pn]["assigned_subtasks"].append(sub.to_dict())
+                    s_dict = sub.to_dict()
+                    s_dict["assigned_to"] = emp_info.get("name", "")
+                    s_dict["assigned_pn"] = selected_pn
+                    s_dict["assigned_role"] = emp_info.get("role", "")
+                    employee_loads[selected_pn]["assigned_subtasks"].append(s_dict)
                 employee_loads[selected_pn]["total_story_points"] += blk_sp
 
         return {

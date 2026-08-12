@@ -24,6 +24,10 @@ class PandasExcelParser:
             None,
         )
         role_col = next((c for c in df.columns if "role" in c or "jabatan" in c), None)
+        telegram_col = next(
+            (c for c in df.columns if any(k in c for k in ("telegram", "username", "tag", "user_id"))),
+            None,
+        )
 
         if not pn_col or not name_col or not role_col:
             raise ValueError(
@@ -39,11 +43,16 @@ class PandasExcelParser:
                 if isinstance(row[pn_col], (int, float))
                 else str(row[pn_col]).strip()
             )
+            tg_val = None
+            if telegram_col and not pd.isna(row[telegram_col]):
+                tg_val = str(row[telegram_col]).strip()
+
             employees.append(
                 Employee(
                     pn=pn_str,
                     name=str(row[name_col]).strip(),
                     role=str(row[role_col]).strip(),
+                    telegram_username=tg_val,
                 )
             )
         return employees

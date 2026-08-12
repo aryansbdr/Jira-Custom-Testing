@@ -12,3 +12,6 @@ openpyxl>=3.1.0
 
 # Settings & Configuration Management
 pydantic-settings>=2.0.0
+
+# Automated Background Scheduling
+apscheduler>=3.10.0

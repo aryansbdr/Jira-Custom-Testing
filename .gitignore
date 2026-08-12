@@ -3,10 +3,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.ruff_cache/
 
-# Environment Variables & Secrets (CRITICAL FOR GITHUB SAFETY)
+# Environment Variables & Secrets
 .env
 .env.local
+.env.*.local
 
 # Virtual Environment
 venv/
@@ -15,9 +17,20 @@ env/
 
 # Output Reports & Local Temp Files
 workload_report_*.xlsx
+Laporan_*.xlsx
 *.log
 
-# IDE & Editor Settings
+# Databases (Exclude temporary databases, but KEEP pre-injected RAG Knowledge Base)
+*.sqlite3
+*.db
+!rag_store.db
+
+# Scratch & Temporary Testing Scripts
+scratch/
+temp/
+
+# IDE & OS Settings
 .vscode/
 .idea/
-.ds_store
+.DS_Store
+Thumbs.db
