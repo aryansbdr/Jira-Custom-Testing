@@ -27,6 +27,7 @@ class ExportExcelRequest(BaseModel):
 
 
 @router.post("/exportExcel")
+@router.post("/export-excel")
 def export_excel_report(req: ExportExcelRequest):
     """
     Generates professional, executive-ready Excel report (.xlsx)
