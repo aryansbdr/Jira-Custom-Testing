@@ -1,5 +1,9 @@
+<<<<<<< HEAD
 // frontend/src/api.js
 const BASE_URL = 'https://grumpy-keys-fall.loca.lt';
+=======
+const BASE_URL = 'https://seattle-velvet-exploration-compete.trycloudflare.com';
+>>>>>>> 2239c07801b0fec768ead33c87ffa76895523331
 
 // 1. Ambil info & deskripsi Epic
 export const getEpicInfo = async (epicKey) => {

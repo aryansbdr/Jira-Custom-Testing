@@ -2,10 +2,12 @@ permissions:
   scopes:
     - read:jira-work
     - write:jira-work
+    - read:jira-user
   external:
     fetch:
       backend:
         - 'https://*.loca.lt'
+        - 'https://*.trycloudflare.com'
 
 modules:
   jira:issueActivity:
@@ -18,11 +20,11 @@ modules:
 
   jira:projectPage:
     - key: custom-reports-with-filter
-      title: Reports Overview
       resource: main
       resolver:
         function: resolver-fn
-      icon: https://developer.atlassian.com/platform/forge/images/icons/issue.svg
+      title: Reports Overview
+      icon: https://developer.atlassian.com/platform/forge/images/icons/issue-activity.svg
 
   function:
     - key: resolver-fn
@@ -31,8 +33,10 @@ modules:
 resources:
   - key: main
     path: frontend/build
+    tunnel:
+      port: 3000
 
 app:
+  id: ari:cloud:ecosystem::app/8ca09d8a-834f-4d0c-9e63-2f77acc3f4ff
   runtime:
     name: nodejs22.x
-  id: ari:cloud:ecosystem::app/8ca09d8a-834f-4d0c-9e63-2f77acc3f4ff

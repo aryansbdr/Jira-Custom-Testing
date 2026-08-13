@@ -47,7 +47,7 @@ function extractTextFromADF(adf) {
 
 
 // ============================================================
-// NORMALIZE ROLE & SQUAD EXTRACTION
+// NORMALIZE ROLE
 // ============================================================
 
 function normalizeCategory(role) {
@@ -60,18 +60,16 @@ function normalizeCategory(role) {
     value === 'front-end' ||
     value === 'front end' ||
     value === 'fe' ||
-    value === 'web' ||
-    value === 'ui'
+    value === 'web'
   ) {
-    return 'WEB';
+    return 'Frontend';
   }
 
   if (
     value === 'backend' ||
     value === 'back-end' ||
     value === 'back end' ||
-    value === 'be' ||
-    value === 'api'
+    value === 'be'
   ) {
     return 'Backend';
   }
@@ -79,9 +77,7 @@ function normalizeCategory(role) {
   if (
     value === 'mobile' ||
     value === 'android' ||
-    value === 'ios' ||
-    value === 'flutter' ||
-    value === 'mob'
+    value === 'ios'
   ) {
     return 'Mobile';
   }
@@ -90,8 +86,7 @@ function normalizeCategory(role) {
     value === 'qa' ||
     value === 'quality assurance' ||
     value === 'tester' ||
-    value === 'testing' ||
-    value === 'pengujian'
+    value === 'testing'
   ) {
     return 'QA';
   }
@@ -101,93 +96,76 @@ function normalizeCategory(role) {
 
 function extractSquadName(summary = '') {
   const text = String(summary || '').trim();
-
-  // 1. Prioritas Utama: Cek prefix kurung siku [WEB], [BE], [Mobile], [QA]
   const match = text.match(/^\[(.*?)\]/);
   if (match && match[1]) {
     return normalizeCategory(match[1].trim());
   }
-
-  // 2. Deteksi Mobile: Diawali atau mengandung kata "Mobile" / "MOB"
   if (/^mobile/i.test(text) || /\bmobile\b/i.test(text) || /^mob\b/i.test(text)) {
     return 'Mobile';
   }
-
-  // 3. Deteksi Backend: Diawali "BE" atau mengandung kata "Backend"
   if (/^be\b/i.test(text) || /\bbackend\b/i.test(text)) {
     return 'Backend';
   }
-
-  // 4. Deteksi WEB: Diawali "WEB", "FE", atau mengandung "Frontend"
   if (/^web\b/i.test(text) || /^fe\b/i.test(text) || /\bfrontend\b/i.test(text)) {
-    return 'WEB';
+    return 'Frontend';
   }
-
-  // 5. Deteksi QA
   if (/^qa\b/i.test(text) || /\btesting\b/i.test(text) || /\bpengujian\b/i.test(text)) {
     return 'QA';
   }
-
-  // 6. Fallback: Analisis kata kunci di dalam string
   const lower = text.toLowerCase();
-
-  if (
-    lower.includes('web') ||
-    lower.includes('frontend') ||
-    lower.includes('front-end') ||
-    lower.includes('fe') ||
-    lower.includes('ui') ||
-    lower.includes('tampilan')
-  ) {
-    return 'WEB';
+  if (lower.includes('frontend') || lower.includes('fe') || lower.includes('web') || lower.includes('ui')) {
+    return 'Frontend';
   }
-
-  if (
-    lower.includes('backend') ||
-    lower.includes('back-end') ||
-    lower.includes('be') ||
-    lower.includes('api') ||
-    lower.includes('otp') ||
-    lower.includes('log') ||
-    lower.includes('database') ||
-    lower.includes('integrasi')
-  ) {
+  if (lower.includes('backend') || lower.includes('be') || lower.includes('api') || lower.includes('endpoint')) {
     return 'Backend';
   }
-
-  if (
-    lower.includes('qa') ||
-    lower.includes('testing') ||
-    lower.includes('test') ||
-    lower.includes('pengujian') ||
-    lower.includes('review')
-  ) {
+  if (lower.includes('qa') || lower.includes('testing') || lower.includes('test') || lower.includes('review')) {
     return 'QA';
   }
-
-  if (
-    lower.includes('mobile') ||
-    lower.includes('android') ||
-    lower.includes('ios') ||
-    lower.includes('flutter')
-  ) {
-    return 'Mobile';
-  }
-
-  return 'Lainnya';
+  return 'Backend';
 }
 
 
 // ============================================================
-// NORMALIZE TASK
+// NORMALIZE TASK & PREDICTABLE KEY CALCULATION
 // ============================================================
 
-function normalizeTask(task, index, category) {
+function calculateSubtaskKey(parentKey, existingSubtasks, index) {
+  const match = String(parentKey || '').match(/^([A-Za-z0-9_]+)-(\d+)$/);
+  if (!match) {
+    return `draf-${index + 1}`;
+  }
+  const prefix = match[1];
+  let maxNum = parseInt(match[2], 10);
+
+  if (Array.isArray(existingSubtasks) && existingSubtasks.length > 0) {
+    for (const sub of existingSubtasks) {
+      const subKey = sub.key || sub.id || '';
+      const subMatch = String(subKey).match(/^([A-Za-z0-9_]+)-(\d+)$/);
+      if (subMatch) {
+        const subNum = parseInt(subMatch[2], 10);
+        if (subNum > maxNum) {
+          maxNum = subNum;
+        }
+      }
+    }
+  }
+
+  return `${prefix}-${maxNum + index + 1}`;
+}
+
+function normalizeTask(task, index, category, parentKey = '', existingSubtasks = []) {
+  const generatedId = calculateSubtaskKey(parentKey, existingSubtasks, index);
+
+  // ----------------------------------------
+  // Jika AI mengembalikan string
+  // ----------------------------------------
+
   if (typeof task === 'string') {
     const text = task.trim();
 
     return {
-      id: `${category}-${index}-${Date.now()}`,
+      id: generatedId,
       text,
       summary: text,
       description: text,
@@ -195,6 +173,11 @@ function normalizeTask(task, index, category) {
       story_points: 1,
     };
   }
+
+
+  // ----------------------------------------
+  // Jika AI mengembalikan object
+  // ----------------------------------------
 
   const summary =
     task?.summary ||
@@ -212,7 +195,7 @@ function normalizeTask(task, index, category) {
     id:
       task?.id ??
       task?.key ??
-      `${category}-${index}-${Date.now()}`,
+      generatedId,
 
     text: String(summary).trim(),
 
@@ -224,6 +207,35 @@ function normalizeTask(task, index, category) {
       task?.role ||
       task?.category ||
       category.toLowerCase(),
+
+    assigneeName:
+      task?.assigneeName ||
+      task?.assigned_to ||
+      task?.employee?.name ||
+      '',
+
+    assigneePn:
+      task?.assigneePn ||
+      task?.assigned_pn ||
+      task?.employee?.pn ||
+      '',
+
+    assigneeRole:
+      task?.assigneeRole ||
+      task?.assigned_role ||
+      task?.employee?.role ||
+      '',
+
+    parent_key:
+      task?.parent_key ||
+      task?.parentKey ||
+      parentKey ||
+      '',
+
+    parent_summary:
+      task?.parent_summary ||
+      task?.parentSummary ||
+      '',
 
     story_points:
       Number(
@@ -241,71 +253,309 @@ function normalizeTask(task, index, category) {
 // ============================================================
 
 function extractSubtasksFromAIResponse(resJson) {
+  console.log(
+    '============================================================'
+  );
+
+  console.log(
+    '[Forge Resolver] Mencoba membaca response FastAPI...'
+  );
+
+  console.log(
+    '[Forge Resolver] Response:',
+    JSON.stringify(resJson, null, 2)
+  );
+
+
+  // ==========================================================
+  // CASE 1
+  //
+  // [
+  //   {
+  //      summary: "...",
+  //      role: "backend"
+  //   }
+  // ]
+  // ==========================================================
+
   if (Array.isArray(resJson)) {
+    console.log(
+      '[Forge Resolver] Format response: ARRAY'
+    );
+
     return resJson;
   }
 
+
+  // ==========================================================
+  // CASE 2
+  //
+  // {
+  //   subtasks: [...]
+  // }
+  // ==========================================================
+
   if (Array.isArray(resJson?.subtasks)) {
+    console.log(
+      '[Forge Resolver] Format response: subtasks[]'
+    );
+
     return resJson.subtasks;
   }
 
+
+  // ==========================================================
+  // CASE 3
+  //
+  // {
+  //   results: [...]
+  // }
+  // ==========================================================
+
   if (Array.isArray(resJson?.results)) {
+    console.log(
+      '[Forge Resolver] Format response: results[]'
+    );
+
     return resJson.results;
   }
 
+
+  // ==========================================================
+  // CASE 4
+  //
+  // {
+  //   data: [...]
+  // }
+  // ==========================================================
+
   if (Array.isArray(resJson?.data)) {
+    console.log(
+      '[Forge Resolver] Format response: data[]'
+    );
+
     return resJson.data;
   }
 
+
+  // ==========================================================
+  // CASE 5
+  //
+  // {
+  //   result: [...]
+  // }
+  // ==========================================================
+
   if (Array.isArray(resJson?.result)) {
+    console.log(
+      '[Forge Resolver] Format response: result[]'
+    );
+
     return resJson.result;
   }
 
+
+  // ==========================================================
+  // CASE 6
+  //
+  // {
+  //   recommendations: [...]
+  // }
+  // ==========================================================
+
   if (Array.isArray(resJson?.recommendations)) {
+    console.log(
+      '[Forge Resolver] Format response: recommendations[]'
+    );
+
     return resJson.recommendations;
   }
 
+
+  // ==========================================================
+  // CASE 7
+  //
+  // {
+  //   generated_subtasks: [...]
+  // }
+  // ==========================================================
+
   if (Array.isArray(resJson?.generated_subtasks)) {
+    console.log(
+      '[Forge Resolver] Format response: generated_subtasks[]'
+    );
+
     return resJson.generated_subtasks;
   }
 
+
+  // ==========================================================
+  // CASE 8
+  //
+  // {
+  //   generatedSubtasks: [...]
+  // }
+  // ==========================================================
+
   if (Array.isArray(resJson?.generatedSubtasks)) {
+    console.log(
+      '[Forge Resolver] Format response: generatedSubtasks[]'
+    );
+
     return resJson.generatedSubtasks;
   }
 
+
+  // ==========================================================
+  // CASE 9
+  //
+  // {
+  //   results: {
+  //      subtasks: [...]
+  //   }
+  // }
+  // ==========================================================
+
   if (Array.isArray(resJson?.results?.subtasks)) {
+    console.log(
+      '[Forge Resolver] Format response: results.subtasks[]'
+    );
+
     return resJson.results.subtasks;
   }
 
+
+  // ==========================================================
+  // CASE 10
+  //
+  // {
+  //   data: {
+  //      subtasks: [...]
+  //   }
+  // }
+  // ==========================================================
+
   if (Array.isArray(resJson?.data?.subtasks)) {
+    console.log(
+      '[Forge Resolver] Format response: data.subtasks[]'
+    );
+
     return resJson.data.subtasks;
   }
 
+
+  // ==========================================================
+  // CASE 11
+  //
+  // {
+  //   result: {
+  //      subtasks: [...]
+  //   }
+  // }
+  // ==========================================================
+
   if (Array.isArray(resJson?.result?.subtasks)) {
+    console.log(
+      '[Forge Resolver] Format response: result.subtasks[]'
+    );
+
     return resJson.result.subtasks;
   }
 
+
+  // ==========================================================
+  // CASE 12
+  //
+  // {
+  //   data: {
+  //      results: [...]
+  //   }
+  // }
+  // ==========================================================
+
   if (Array.isArray(resJson?.data?.results)) {
+    console.log(
+      '[Forge Resolver] Format response: data.results[]'
+    );
+
     return resJson.data.results;
   }
 
+
+  // ==========================================================
+  // CASE 13
+  //
+  // {
+  //   results: {
+  //      results: [...]
+  //   }
+  // }
+  // ==========================================================
+
   if (Array.isArray(resJson?.results?.results)) {
+    console.log(
+      '[Forge Resolver] Format response: results.results[]'
+    );
+
     return resJson.results.results;
   }
 
-  if (Array.isArray(resJson?.results?.assignments)) {
+
+  // ==========================================================
+  // CASE 14 — FORMAT FASTAPI SAAT INI
+  //
+  // {
+  //   status: "success",
+  //   results: {
+  //     assignments: [
+  //       {
+  //         employee: {...},
+  //         assigned_subtasks: [...]
+  //       }
+  //     ],
+  //     unassigned_subtasks: [...]
+  //   }
+  // }
+  // ==========================================================
+
+  if (
+    Array.isArray(resJson?.results?.assignments)
+  ) {
+    console.log(
+      '[Forge Resolver] Format response: results.assignments[].assigned_subtasks[]'
+    );
+
     const assignedSubtasks =
       resJson.results.assignments.flatMap(
         (assignment) =>
-          Array.isArray(assignment?.assigned_subtasks)
-            ? assignment.assigned_subtasks
+          Array.isArray(
+            assignment?.assigned_subtasks
+          )
+            ? assignment.assigned_subtasks.map((st) => ({
+                ...st,
+                assigneeName: assignment.employee?.name || st.assigned_to,
+                assigneePn: assignment.employee?.pn || st.assigned_pn,
+                assigneeRole: assignment.employee?.role || st.assigned_role,
+              }))
             : []
       );
 
     const unassignedSubtasks =
-      Array.isArray(resJson?.results?.unassigned_subtasks)
+      Array.isArray(
+        resJson?.results?.unassigned_subtasks
+      )
         ? resJson.results.unassigned_subtasks
         : [];
+
+    console.log(
+      '[Forge Resolver] Assigned subtasks:',
+      assignedSubtasks.length
+    );
+
+    console.log(
+      '[Forge Resolver] Unassigned subtasks:',
+      unassignedSubtasks.length
+    );
 
     return [
       ...assignedSubtasks,
@@ -313,14 +563,37 @@ function extractSubtasksFromAIResponse(resJson) {
     ];
   }
 
-  if (Array.isArray(resJson?.assignments)) {
-    return resJson.assignments.flatMap(
-      (assignment) =>
-        Array.isArray(assignment?.assigned_subtasks)
-          ? assignment.assigned_subtasks
-          : []
+
+  // ==========================================================
+  // CASE 15
+  //
+  // Fallback jika assignments langsung berisi subtasks
+  // ==========================================================
+
+  if (
+    Array.isArray(resJson?.assignments)
+  ) {
+    console.log(
+      '[Forge Resolver] Format response: assignments[]'
     );
+
+    const assignedSubtasks =
+      resJson.assignments.flatMap(
+        (assignment) =>
+          Array.isArray(
+            assignment?.assigned_subtasks
+          )
+            ? assignment.assigned_subtasks
+            : []
+      );
+
+    return assignedSubtasks;
   }
+
+
+  console.warn(
+    '[Forge Resolver] TIDAK menemukan array subtasks di response FastAPI.'
+  );
 
   return [];
 }
@@ -348,9 +621,15 @@ function convertSubtasksToGroups(subtasks) {
         'backend';
     }
 
-    const category = normalizeCategory(role);
+    const category =
+      normalizeCategory(role);
 
-    const task = normalizeTask(rawTask, index, category);
+    const task =
+      normalizeTask(
+        rawTask,
+        index,
+        category
+      );
 
     if (!task.text) {
       return;
@@ -367,11 +646,16 @@ function convertSubtasksToGroups(subtasks) {
     groupMap[category].tasks.push(task);
   });
 
-  const groups = Object.values(groupMap);
+
+  const groups =
+    Object.values(groupMap);
+
 
   groups.forEach((group) => {
-    group.badgeCount = `${group.tasks.length} task`;
+    group.badgeCount =
+      `${group.tasks.length} task`;
   });
+
 
   return groups;
 }
@@ -381,178 +665,261 @@ function convertSubtasksToGroups(subtasks) {
 // 1. SQUAD PROGRESS REPORT
 // ============================================================
 
-resolver.define('getSquadProgress', async (req) => {
-  try {
-    const { projectKey = 'SCRUM' } = req.payload || {};
-    const jql = `project = "${projectKey}" AND issuetype in subTaskIssueTypes() ORDER BY parent`;
+resolver.define(
+  'getSquadProgress',
+  async (req) => {
+    try {
+      const {
+        projectKey = 'SCRUM',
+      } = req.payload || {};
 
-    let allSubtasks = [];
-    let startAt = 0;
-    let isLastPage = false;
-    const maxResultsPerPage = 100;
+      const jql =
+        `project = "${projectKey}" AND issuetype in subTaskIssueTypes()`;
 
-    while (!isLastPage && allSubtasks.length < 1000) {
-      let response = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          jql,
-          startAt,
-          maxResults: maxResultsPerPage,
-          fields: ['summary', 'status', 'assignee', 'parent'],
-        }),
-      });
+      console.log(
+        '[Squad Report] JQL:',
+        jql
+      );
+
+
+      const response =
+        await api
+          .asUser()
+          .requestJira(
+            route`/rest/api/3/search/jql`,
+            {
+              method: 'POST',
+
+              headers: {
+                Accept:
+                  'application/json',
+
+                'Content-Type':
+                  'application/json',
+              },
+
+              body:
+                JSON.stringify({
+                  jql,
+
+                  fields: [
+                    'summary',
+                    'status',
+                    'assignee',
+                    'parent',
+                  ],
+                }),
+            }
+          );
+
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('[Squad Report] Jira API Error:', response.status, errorText);
-        break;
-      }
+        console.error(
+          '[Squad Report] Jira error:',
+          await response.text()
+        );
 
-      const data = await response.json();
-      const fetchedIssues = Array.isArray(data.issues) ? data.issues : [];
-      allSubtasks.push(...fetchedIssues);
-
-      if (fetchedIssues.length < maxResultsPerPage || allSubtasks.length >= (data.total || 0)) {
-        isLastPage = true;
-      } else {
-        startAt += fetchedIssues.length;
-      }
-    }
-
-    const parentMap = {};
-    const allStatuses = new Set();
-
-    allSubtasks.forEach((issue) => {
-      const fields = issue.fields || {};
-      const parentKey = fields.parent?.key;
-
-      if (!parentKey) return;
-
-      const parentSummary = fields.parent?.fields?.summary || parentKey;
-      const summary = fields.summary || '';
-      const statusName = fields.status?.name || 'To Do';
-      const assigneeName = fields.assignee?.displayName || 'Unassigned';
-
-      allStatuses.add(statusName);
-      const squadName = extractSquadName(summary);
-
-      if (!parentMap[parentKey]) {
-        parentMap[parentKey] = {
-          key: parentKey,
-          title: `${parentSummary} (${parentKey})`,
-          parentSummary: parentSummary,
-          squadStats: {},
-          memberStats: {},
-          totalSubtasks: 0,
-          completedSubtasks: 0,
+        return {
+          parentIssues: [],
+          squadsList: [],
+          memberDataBySquad: {},
         };
       }
 
-      const parent = parentMap[parentKey];
-      parent.totalSubtasks += 1;
 
-      const statusLower = statusName.toLowerCase();
-      if (['done', 'closed', 'resolved', 'selesai', 'complete', 'completed'].includes(statusLower)) {
-        parent.completedSubtasks += 1;
-      }
+      const data =
+        await response.json();
 
-      if (!parent.squadStats[squadName]) {
-        parent.squadStats[squadName] = { total: 0 };
-      }
-      const squadStats = parent.squadStats[squadName];
-      squadStats[statusName] = (squadStats[statusName] || 0) + 1;
-      squadStats.total = (squadStats.total || 0) + 1;
+      const issues =
+        Array.isArray(data.issues)
+          ? data.issues
+          : [];
 
-      if (!parent.memberStats[squadName]) {
-        parent.memberStats[squadName] = {};
-      }
-      if (!parent.memberStats[squadName][assigneeName]) {
-        parent.memberStats[squadName][assigneeName] = { total: 0 };
-      }
-      const memberStats = parent.memberStats[squadName][assigneeName];
-      memberStats[statusName] = (memberStats[statusName] || 0) + 1;
-      memberStats.total = (memberStats.total || 0) + 1;
-    });
 
-    const DEFAULT_ROLES = ['Backend', 'WEB', 'Mobile', 'QA', 'Lainnya'];
-    const statusList = Array.from(allStatuses);
+      const parentMap = {};
+      const squadSet = new Set();
+      const memberMapBySquad = {};
 
-    const parentIssues = Object.values(parentMap).map((parent) => {
-      DEFAULT_ROLES.forEach((role) => {
-        if (!parent.squadStats[role]) {
-          parent.squadStats[role] = { total: 0 };
+
+      const initStats = () => ({
+        todo: 0,
+        inProgress: 0,
+        done: 0,
+        total: 0,
+      });
+
+
+      issues.forEach((issue) => {
+        const parentKey =
+          issue.fields?.parent?.key ||
+          'Lainnya';
+
+        const parentSummary =
+          issue.fields?.parent?.fields?.summary ||
+          parentKey;
+
+        const summary =
+          issue.fields?.summary ||
+          '';
+
+        const statusCategory =
+          issue.fields?.status?.statusCategory?.key;
+
+        const assigneeName =
+          issue.fields?.assignee?.displayName ||
+          'Unassigned';
+
+
+        const match =
+          summary.match(/^\[(.*?)\]/);
+
+        const squadName =
+          match
+            ? match[1].trim()
+            : 'Lainnya';
+
+
+        squadSet.add(
+          squadName
+        );
+
+
+        if (!parentMap[parentKey]) {
+          parentMap[parentKey] = {
+            key: parentKey,
+
+            title:
+              `${parentSummary} (${parentKey})`,
+
+            squadMap: {},
+          };
         }
+
+
+        if (
+          !parentMap[parentKey]
+            .squadMap[squadName]
+        ) {
+          parentMap[parentKey]
+            .squadMap[squadName] =
+            initStats();
+        }
+
+
+        if (
+          !memberMapBySquad[squadName]
+        ) {
+          memberMapBySquad[squadName] = {};
+        }
+
+
+        if (
+          !memberMapBySquad[squadName]
+          [assigneeName]
+        ) {
+          memberMapBySquad[squadName]
+          [assigneeName] =
+            initStats();
+        }
+
+
+        const parentStats =
+          parentMap[parentKey]
+            .squadMap[squadName];
+
+        const memberStats =
+          memberMapBySquad[squadName]
+          [assigneeName];
+
+
+        if (statusCategory === 'new') {
+          parentStats.todo++;
+          memberStats.todo++;
+        } else if (
+          statusCategory === 'indeterminate'
+        ) {
+          parentStats.inProgress++;
+          memberStats.inProgress++;
+        } else if (
+          statusCategory === 'done'
+        ) {
+          parentStats.done++;
+          memberStats.done++;
+        }
+
+
+        parentStats.total++;
+        memberStats.total++;
       });
 
-      const chartData = Object.keys(parent.squadStats).map((squad) => {
-        const item = { name: squad, total: parent.squadStats[squad].total || 0 };
-        statusList.forEach((st) => {
-          item[st] = parent.squadStats[squad][st] || 0;
-        });
-        return item;
+
+      const parentIssues =
+        Object.values(parentMap)
+          .map((item) => ({
+            key: item.key,
+            title: item.title,
+
+            chartData:
+              Object.keys(item.squadMap)
+                .map((sq) => ({
+                  name: sq,
+                  ...item.squadMap[sq],
+                })),
+          }));
+
+
+      const memberDataBySquad = {};
+
+
+      Object.keys(
+        memberMapBySquad
+      ).forEach((squad) => {
+        memberDataBySquad[squad] =
+          Object.keys(
+            memberMapBySquad[squad]
+          ).map((member) => ({
+            name: member,
+            ...memberMapBySquad[squad][member],
+          }));
       });
 
-      const memberDataByCategory = {};
-      Object.keys(parent.memberStats).forEach((squad) => {
-        memberDataByCategory[squad] = Object.keys(parent.memberStats[squad]).map((member) => {
-          const item = { name: member, total: parent.memberStats[squad][member].total || 0 };
-          statusList.forEach((st) => {
-            item[st] = parent.memberStats[squad][member][st] || 0;
-          });
-          return item;
-        });
-      });
-
-      const progressPercentage = parent.totalSubtasks > 0
-        ? Math.round((parent.completedSubtasks / parent.totalSubtasks) * 100)
-        : 0;
 
       return {
-        key: parent.key,
-        title: parent.title,
-        parentSummary: parent.parentSummary,
-        totalSubtasks: parent.totalSubtasks,
-        completedSubtasks: parent.completedSubtasks,
-        progressPercentage,
-        chartData,
-        memberDataByCategory,
+        parentIssues,
+        squadsList:
+          Array.from(squadSet),
+        memberDataBySquad,
       };
-    });
 
-    return {
-      parentIssues,
-      availableStatuses: statusList,
-    };
+    } catch (error) {
+      console.error(
+        '[Squad Report] Error:',
+        error
+      );
 
-  } catch (error) {
-    console.error('[Squad Report] Error:', error);
-    return {
-      parentIssues: [],
-      availableStatuses: [],
-    };
+      return {
+        parentIssues: [],
+        squadsList: [],
+        memberDataBySquad: {},
+      };
+    }
   }
-});
+);
 
 
 // ============================================================
-// 2. GET PROJECT EPICS (FIXED API)
+// 1B. GET PROJECT EPICS (FOR AGILE REPORTS)
 // ============================================================
 
 resolver.define('getProjectEpics', async (req) => {
   const { projectKey } = req.payload || {};
-  if (!projectKey) {
-    throw new Error('Project Key tidak ditemukan.');
-  }
+  const cleanProjectKey = String(projectKey || 'JT').trim();
 
-  const jql = `project = "${projectKey}" AND issuetype = "Epic" ORDER BY created DESC`;
-  
-  const response = await api.asUser().requestJira(
-    route`/rest/api/3/search/jql`,
-    {
+  try {
+    const jql = `project = "${cleanProjectKey}" AND (issuetype = "Epic" OR hierarchyLevel = 1) ORDER BY created DESC`;
+    console.log('[getProjectEpics] Executing JQL:', jql);
+
+    let response = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -561,29 +928,49 @@ resolver.define('getProjectEpics', async (req) => {
       body: JSON.stringify({
         jql,
         maxResults: 100,
-        fields: ['summary', 'status'],
+        fields: ['summary', 'status', 'issuetype'],
       }),
+    });
+
+    if (!response.ok) {
+      console.warn(`[getProjectEpics] asUser failed (${response.status}), retrying with asApp...`);
+      response = await api.asApp().requestJira(route`/rest/api/3/search/jql`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          jql,
+          maxResults: 100,
+          fields: ['summary', 'status', 'issuetype'],
+        }),
+      });
     }
-  );
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gagal mengambil Epics: ${response.status} ${errText}`);
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error(`[getProjectEpics] JQL failed: ${response.status} ${errText}`);
+      return { epics: [] };
+    }
+
+    const data = await response.json();
+    const epics = (data.issues || []).map((issue) => ({
+      key: issue.key,
+      summary: issue.fields?.summary || issue.key,
+      status: issue.fields?.status?.name || 'Unknown',
+    }));
+
+    return { epics };
+  } catch (err) {
+    console.error('[getProjectEpics] Error:', err);
+    return { epics: [] };
   }
-
-  const data = await response.json();
-  const epics = (data.issues || []).map((issue) => ({
-    key: issue.key,
-    summary: issue.fields.summary,
-    status: issue.fields.status?.name || 'Unknown'
-  }));
-
-  return { epics };
 });
 
 
 // ============================================================
-// 3. GET EPIC STORY DETAILS & ROLE BREAKDOWN (FIXED API)
+// 1C. GET EPIC STORY DETAILS & SUBTASKS (FOR SQUAD REPORT)
 // ============================================================
 
 resolver.define('getEpicStoryDetails', async (req) => {
@@ -592,11 +979,54 @@ resolver.define('getEpicStoryDetails', async (req) => {
     return { stories: [] };
   }
 
-  const storyJql = `project = "${projectKey}" AND (parent = "${epicKey}" OR "Epic Link" = "${epicKey}") ORDER BY key ASC`;
-  
-  const storyRes = await api.asUser().requestJira(
-    route`/rest/api/3/search/jql`,
-    {
+  // Extract clean key, e.g. from "[JT-22] Brispot..." -> "JT-22"
+  const cleanEpicKey = String(epicKey).trim().replace(/^\[|\]$/g, '').split(' ')[0].split('-')[0] + '-' + (String(epicKey).match(/\d+/) ? String(epicKey).match(/\d+/)[0] : '');
+  const targetKey = cleanEpicKey.includes('-') ? cleanEpicKey : String(epicKey).trim();
+
+  try {
+    console.log(`[getEpicStoryDetails] Fetching child stories for Epic: ${targetKey}`);
+
+    let epicDetails = {
+      key: targetKey,
+      summary: '',
+      startDate: '',
+      endDate: '',
+      sprintName: '',
+      duedate: '',
+      created: ''
+    };
+
+    try {
+      let epicRes = await api.asUser().requestJira(route`/rest/api/3/issue/${targetKey}?fields=summary,status,duedate,created,customfield_10020,fixVersions`);
+      if (!epicRes.ok) {
+        epicRes = await api.asApp().requestJira(route`/rest/api/3/issue/${targetKey}?fields=summary,status,duedate,created,customfield_10020,fixVersions`);
+      }
+      if (epicRes.ok) {
+        const epData = await epicRes.json();
+        const f = epData.fields || {};
+        const sprints = Array.isArray(f.customfield_10020) ? f.customfield_10020 : [];
+        const activeSprint = sprints.find((s) => s.state === 'active') || sprints[sprints.length - 1];
+
+        epicDetails.summary = f.summary || '';
+        epicDetails.duedate = f.duedate || '';
+        epicDetails.created = f.created || '';
+
+        if (activeSprint) {
+          epicDetails.sprintName = activeSprint.name || '';
+          epicDetails.startDate = activeSprint.startDate || f.created;
+          epicDetails.endDate = activeSprint.endDate || f.duedate;
+        } else {
+          epicDetails.startDate = f.created || '';
+          epicDetails.endDate = f.duedate || '';
+        }
+      }
+    } catch (eErr) {
+      console.warn('[getEpicStoryDetails] Gagal fetch epic metadata:', eErr);
+    }
+
+    const storyJql = `(parent = "${targetKey}" OR "Epic Link" = "${targetKey}") ORDER BY key ASC`;
+
+    let storyRes = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -607,27 +1037,46 @@ resolver.define('getEpicStoryDetails', async (req) => {
         maxResults: 100,
         fields: ['summary', 'status', 'issuetype'],
       }),
+    });
+
+    if (!storyRes.ok) {
+      console.warn(`[getEpicStoryDetails] asUser search failed (${storyRes.status}), retrying asApp...`);
+      storyRes = await api.asApp().requestJira(route`/rest/api/3/search/jql`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          jql: storyJql,
+          maxResults: 100,
+          fields: ['summary', 'status', 'issuetype'],
+        }),
+      });
     }
-  );
 
-  if (!storyRes.ok) {
-    const errText = await storyRes.text();
-    throw new Error(`Gagal mengambil Story untuk Epic ${epicKey}: ${errText}`);
-  }
+    if (!storyRes.ok) {
+      console.error('[getEpicStoryDetails] Story query failed:', await storyRes.text());
+      return { stories: [] };
+    }
 
-  const storyData = await storyRes.json();
-  const stories = storyData.issues || [];
+    const storyData = await storyRes.json();
+    const rawStories = storyData.issues || [];
 
-  if (stories.length === 0) {
-    return { stories: [] };
-  }
+    // Filter out subtasks from direct children (only Stories / Tasks)
+    const stories = rawStories.filter((s) => {
+      const typeName = (s.fields?.issuetype?.name || '').toLowerCase();
+      return !typeName.includes('sub-task') && !typeName.includes('subtask') && !s.fields?.issuetype?.subtask;
+    });
 
-  const storyKeys = stories.map((s) => s.key);
-  const subtaskJql = `parent in (${storyKeys.map((k) => `"${k}"`).join(',')}) ORDER BY key ASC`;
+    if (stories.length === 0) {
+      return { stories: [] };
+    }
 
-  const subtaskRes = await api.asUser().requestJira(
-    route`/rest/api/3/search/jql`,
-    {
+    const storyKeys = stories.map((s) => s.key);
+    const subtaskJql = `parent in (${storyKeys.map((k) => `"${k}"`).join(',')}) ORDER BY key ASC`;
+
+    let subtaskRes = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -636,316 +1085,1053 @@ resolver.define('getEpicStoryDetails', async (req) => {
       body: JSON.stringify({
         jql: subtaskJql,
         maxResults: 500,
-        fields: ['summary', 'status', 'parent', 'assignee'],
+        fields: ['summary', 'status', 'parent', 'assignee', 'issuetype'],
       }),
-    }
-  );
-
-  let subtasks = [];
-  if (subtaskRes.ok) {
-    const subtaskData = await subtaskRes.json();
-    subtasks = subtaskData.issues || [];
-  }
-
-  const subtasksByStoryKey = {};
-  subtasks.forEach((st) => {
-    const parentKey = st.fields.parent?.key;
-    if (!parentKey) return;
-
-    if (!subtasksByStoryKey[parentKey]) {
-      subtasksByStoryKey[parentKey] = [];
-    }
-
-    const summary = st.fields.summary || '';
-    const assigneeName = st.fields.assignee?.displayName;
-    const role = extractSquadName(summary);
-
-    subtasksByStoryKey[parentKey].push({
-      key: st.key,
-      summary: st.fields.summary,
-      status: st.fields.status?.name || 'To Do',
-      role: role,
-      assignee: assigneeName || 'Unassigned'
     });
-  });
 
-  const processedStories = stories.map((story) => {
-    const storySubtasks = subtasksByStoryKey[story.key] || [];
+    if (!subtaskRes.ok) {
+      subtaskRes = await api.asApp().requestJira(route`/rest/api/3/search/jql`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          jql: subtaskJql,
+          maxResults: 500,
+          fields: ['summary', 'status', 'parent', 'assignee', 'issuetype'],
+        }),
+      });
+    }
 
-    // Map dinamis: Hanya membuat entry untuk role yang benar-benar ada subtasknya
-    const roleMap = {};
+    let subtasks = [];
+    if (subtaskRes.ok) {
+      const subtaskData = await subtaskRes.json();
+      subtasks = subtaskData.issues || [];
+    }
 
-    storySubtasks.forEach((st) => {
-      if (!roleMap[st.role]) {
-        roleMap[st.role] = { name: st.role, total: 0 };
+    const subtasksByStoryKey = {};
+    subtasks.forEach((st) => {
+      const parentKey = st.fields?.parent?.key;
+      if (!parentKey) return;
+
+      if (!subtasksByStoryKey[parentKey]) {
+        subtasksByStoryKey[parentKey] = [];
       }
-      roleMap[st.role][st.status] = (roleMap[st.role][st.status] || 0) + 1;
-      roleMap[st.role].total += 1;
+
+      const summary = st.fields?.summary || '';
+      const assigneeName = st.fields?.assignee?.displayName;
+      const role = extractSquadName(summary);
+
+      subtasksByStoryKey[parentKey].push({
+        key: st.key,
+        summary: st.fields?.summary || '',
+        status: st.fields?.status?.name || 'To Do',
+        role: role,
+        assignee: assigneeName || 'Unassigned',
+        iconUrl: st.fields?.issuetype?.iconUrl || '',
+        typeName: st.fields?.issuetype?.name || 'Sub-task'
+      });
     });
 
-    const roleChartData = Object.values(roleMap);
-    const availableRoles = Object.keys(roleMap); // Mengirim daftar role aktif saja
+    const processedStories = stories.map((story) => {
+      const storySubtasks = subtasksByStoryKey[story.key] || [];
+      const roleMap = {};
 
-    return {
-      key: story.key,
-      summary: story.fields.summary,
-      status: story.fields.status?.name || 'Unknown',
-      subtasks: storySubtasks,
-      roleChartData,
-      availableRoles
-    };
-  });
+      storySubtasks.forEach((st) => {
+        if (!roleMap[st.role]) {
+          roleMap[st.role] = { name: st.role, total: 0 };
+        }
+        roleMap[st.role][st.status] = (roleMap[st.role][st.status] || 0) + 1;
+        roleMap[st.role].total += 1;
+      });
 
-  return { stories: processedStories };
+      const roleChartData = Object.values(roleMap);
+      const availableRoles = Object.keys(roleMap);
+
+      return {
+        key: story.key,
+        summary: story.fields?.summary || story.key,
+        status: story.fields?.status?.name || 'Unknown',
+        iconUrl: story.fields?.issuetype?.iconUrl || '',
+        typeName: story.fields?.issuetype?.name || 'Story',
+        subtasks: storySubtasks,
+        roleChartData,
+        availableRoles,
+      };
+    });
+
+    return { stories: processedStories, epicDetails };
+  } catch (err) {
+    console.error('[getEpicStoryDetails] Error:', err);
+    return { stories: [], epicDetails: null };
+  }
 });
 
 
 // ============================================================
-// 4. GET AI RECOMMENDATIONS
+// 1D. EXPORT EXCEL VIA PYTHON BACKEND (WITH NATIVE CHARTS)
 // ============================================================
 
-resolver.define('getRecommendations', async (req) => {
-  const { issueKey } = req.payload || {};
-
-  if (!issueKey) {
-    return [];
-  }
+resolver.define('exportExcelReport', async (req) => {
+  const payload = req.payload || {};
+  const FASTAPI_REPORT_URL =
+    'https://seattle-velvet-exploration-compete.trycloudflare.com/api/v1/reporting/export-excel';
 
   try {
-    const jiraResponse = await api
-      .asApp()
-      .requestJira(
-        route`/rest/api/3/issue/${issueKey}?fields=summary,description,subtasks`
-      );
-
-    if (!jiraResponse.ok) {
-      return [];
-    }
-
-    const jiraData = await jiraResponse.json();
-
-    const summary = jiraData.fields?.summary || '';
-    const descriptionText = extractTextFromADF(jiraData.fields?.description);
-    const existingSubtasks = jiraData.fields?.subtasks || [];
-
-    const FASTAPI_URL = 'https://every-showers-clean.loca.lt/api/v1/predict';
-
-    const requestBody = {
-      title: summary,
-      ac_text: descriptionText || summary,
-      parent_sp: 3.0,
-      members: [
-        { pn: '001', name: 'Developer Backend', role: 'backend' },
-        { pn: '002', name: 'Developer Frontend', role: 'frontend' },
-        { pn: '003', name: 'QA Engineer', role: 'qa' },
-      ],
-      selected_role: 'all',
-      parent_type: 'Story',
-    };
-
-    const pyResponse = await fetch(FASTAPI_URL, {
+    console.log('[Export Excel] Calling Python Excel Reporter:', FASTAPI_REPORT_URL);
+    const pyRes = await fetch(FASTAPI_REPORT_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'bypass-tunnel-reminder': 'true',
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({
+        ...payload,
+        return_base64: true,
+      }),
     });
 
-    const responseText = await pyResponse.text();
-
-    if (!pyResponse.ok) {
-      return [];
+    if (!pyRes.ok) {
+      const errText = await pyRes.text();
+      console.error('[Export Excel] Python backend error:', pyRes.status, errText);
+      return {
+        success: false,
+        error: `Python report error: ${errText}`,
+      };
     }
 
-    let resJson;
-    try {
-      resJson = JSON.parse(responseText);
-    } catch (error) {
-      return [];
-    }
-
-    const rawSubtasks = extractSubtasksFromAIResponse(resJson);
-
-    if (rawSubtasks.length === 0) {
-      return [];
-    }
-
-    const existingCounts = {};
-    for (const st of existingSubtasks) {
-      const existingSummary = cleanText(st.fields?.summary || '');
-      if (!existingSummary) continue;
-      existingCounts[existingSummary] = (existingCounts[existingSummary] || 0) + 1;
-    }
-
-    const normalizedTasks = rawSubtasks
-      .map((task, index) => {
-        let role = 'backend';
-        if (typeof task === 'object') {
-          role = task?.role || task?.category || task?.team || 'backend';
-        }
-        const category = normalizeCategory(role);
-        return normalizeTask(task, index, category);
-      })
-      .filter((task) => task.text && task.text.trim());
-
-    const remainingTasks = [];
-    const counts = { ...existingCounts };
-
-    for (const task of normalizedTasks) {
-      const taskClean = cleanText(task.text);
-      if (counts[taskClean] && counts[taskClean] > 0) {
-        counts[taskClean]--;
-      } else {
-        remainingTasks.push(task);
-      }
-    }
-
-    return convertSubtasksToGroups(remainingTasks);
-
-  } catch (error) {
-    return [];
+    const data = await pyRes.json();
+    return {
+      success: true,
+      filename: data.filename || `Laporan_Progress_${payload.root_key || 'Sprint'}.xlsx`,
+      base64: data.base64,
+    };
+  } catch (err) {
+    console.error('[Export Excel] Error:', err);
+    return {
+      success: false,
+      error: err?.message || String(err),
+    };
   }
 });
 
 
 // ============================================================
-// 5. CREATE SUBTASKS
+// 2. GET AI RECOMMENDATIONS
 // ============================================================
 
-resolver.define('createSubtasks', async (req) => {
-  const { issueKey, subtasks } = req.payload || {};
+resolver.define(
+  'getRecommendations',
+  async (req) => {
 
-  if (!issueKey || !Array.isArray(subtasks) || subtasks.length === 0) {
-    return {
-      success: false,
-      error: 'Data tidak lengkap',
-    };
-  }
+    const {
+      issueKey,
+    } = req.payload || {};
 
-  try {
-    const issueResponse = await api
-      .asApp()
-      .requestJira(route`/rest/api/3/issue/${issueKey}?fields=project`);
 
-    if (!issueResponse.ok) {
-      const errorText = await issueResponse.text();
-      return {
-        success: false,
-        error: `Gagal mengambil issue: ${errorText}`,
-      };
-    }
-
-    const issueData = await issueResponse.json();
-    const projectId = issueData.fields?.project?.id;
-
-    if (!projectId) {
-      return {
-        success: false,
-        error: 'Project ID tidak ditemukan',
-      };
-    }
-
-    const projectResponse = await api
-      .asApp()
-      .requestJira(route`/rest/api/3/project/${projectId}`);
-
-    if (!projectResponse.ok) {
-      const errorText = await projectResponse.text();
-      return {
-        success: false,
-        error: `Gagal mengambil project: ${errorText}`,
-      };
-    }
-
-    const projectData = await projectResponse.json();
-    const subtaskType = (projectData.issueTypes || []).find(
-      (type) => type.subtask === true
+    console.log(
+      '============================================================'
     );
 
-    if (!subtaskType) {
+    console.log(
+      '[AI Recommendation] START'
+    );
+
+    console.log(
+      '[AI Recommendation] issueKey:',
+      issueKey
+    );
+
+
+    if (!issueKey) {
+      console.error(
+        '[AI Recommendation] issueKey kosong'
+      );
+
+      return [];
+    }
+
+
+    try {
+
+      // ========================================================
+      // STEP 1 — GET JIRA ISSUE
+      // ========================================================
+
+      const jiraResponse =
+        await api
+          .asUser()
+          .requestJira(
+            route`/rest/api/3/issue/${issueKey}?fields=summary,description,subtasks,issuetype,customfield_10016`
+          );
+
+      if (!jiraResponse.ok) {
+        const errorText =
+          await jiraResponse.text();
+        console.error(
+          '[AI Recommendation] Jira error:',
+          jiraResponse.status,
+          errorText
+        );
+        return [];
+      }
+
+      const jiraData =
+        await jiraResponse.json();
+
+      const summary =
+        jiraData.fields?.summary ||
+        '';
+
+      const descriptionText =
+        extractTextFromADF(
+          jiraData.fields?.description
+        );
+
+      const existingSubtasks =
+        jiraData.fields?.subtasks ||
+        [];
+
+      const issueTypeName = (jiraData.fields?.issuetype?.name || '').toLowerCase();
+      const isEpic = (
+        issueTypeName === 'epic' ||
+        jiraData.fields?.issuetype?.hierarchyLevel === 1
+      );
+
+      let childStories = [];
+      if (isEpic) {
+        console.log(`[AI Recommendation] Issue ${issueKey} terdeteksi sebagai EPIC. Mengambil seluruh child work items...`);
+        try {
+          const jqlQuery = `parent = "${issueKey}" OR "Epic Link" = "${issueKey}" ORDER BY created ASC`;
+          const searchRes = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              jql: jqlQuery,
+              fields: ['summary', 'description', 'subtasks', 'issuetype', 'status', 'customfield_10016'],
+              maxResults: 100
+            })
+          });
+          if (searchRes.ok) {
+            const searchData = await searchRes.json();
+            const rawChildren = Array.isArray(searchData.issues) ? searchData.issues : [];
+            childStories = rawChildren
+              .filter(ch => {
+                const typeName = (ch.fields?.issuetype?.name || '').toLowerCase();
+                const isSub = ch.fields?.issuetype?.subtask || typeName.includes('sub-task') || typeName.includes('subtask');
+                return !isSub;
+              })
+              .map(ch => {
+                const chSummary = ch.fields?.summary || ch.key;
+                const chDesc = extractTextFromADF(ch.fields?.description) || chSummary;
+                const chExisting = (ch.fields?.subtasks || []).map(st => st.fields?.summary || '').filter(Boolean);
+                const chSp = ch.fields?.customfield_10016 || 3.0;
+                return {
+                  key: ch.key,
+                  title: chSummary,
+                  summary: chSummary,
+                  ac_text: chDesc,
+                  description: chDesc,
+                  parent_sp: chSp,
+                  existing_subtask_summaries: chExisting,
+                  parent_type: ch.fields?.issuetype?.name || 'Story'
+                };
+              });
+            console.log(`[AI Recommendation] Berhasil menemukan ${childStories.length} child stories di bawah Epic ${issueKey}:`, childStories.map(c => c.key));
+          }
+        } catch (epicErr) {
+          console.warn(`[AI Recommendation] Gagal mencari child stories untuk Epic ${issueKey}:`, epicErr);
+        }
+      }
+
+      console.log(
+        '[AI Recommendation] Summary:',
+        summary
+      );
+
+      console.log(
+        '[AI Recommendation] Description:',
+        descriptionText
+      );
+
+      console.log(
+        '[AI Recommendation] Existing subtasks:',
+        existingSubtasks.length
+      );
+
+      // ========================================================
+      // STEP 2 — FASTAPI
+      // ========================================================
+
+      const FASTAPI_URL =
+        "https://seattle-velvet-exploration-compete.trycloudflare.com/api/v1/predict";
+
+      console.log('========================================');
+      console.log('[DEBUG JIRA → FASTAPI]');
+      console.log('[DEBUG] issueKey:', issueKey);
+      console.log('[DEBUG] Summary:', summary);
+      console.log('[DEBUG] isEpic:', isEpic);
+      console.log('[DEBUG] childStories count:', childStories.length);
+      console.log('========================================');
+
+      const requestBody = {
+        issue_key:
+          issueKey,
+
+        title:
+          summary,
+
+        ac_text:
+          descriptionText ||
+          summary,
+
+        parent_sp:
+          3.0,
+
+        is_epic:
+          isEpic && childStories.length > 0,
+
+        stories:
+          childStories.length > 0 ? childStories : [],
+
+        existing_subtask_summaries:
+          existingSubtasks.map(
+            (st) => st.fields?.summary || ''
+          ).filter(Boolean),
+
+        members: [
+          {
+            pn: '001',
+            name: 'Developer Backend',
+            role: 'backend',
+          },
+
+          {
+            pn: '002',
+            name: 'Developer Frontend',
+            role: 'frontend',
+          },
+
+          {
+            pn: '003',
+            name: 'QA Engineer',
+            role: 'qa',
+          },
+        ],
+
+        selected_role:
+          'all',
+
+        parent_type:
+          isEpic ? 'Epic' : 'Story',
+      };
+
+      console.log(
+        '[DEBUG] Request Body:',
+        JSON.stringify(requestBody, null, 2)
+      );
+
+      console.log(
+        '[AI Recommendation] Calling FastAPI:',
+        FASTAPI_URL
+      );
+
+      console.log(
+        '[AI Recommendation] Request body:',
+        JSON.stringify(
+          requestBody,
+          null,
+          2
+        )
+      );
+
+
+      // ========================================================
+      // STEP 3 — REQUEST
+      // ========================================================
+
+      const pyResponse =
+        await fetch(
+          FASTAPI_URL,
+          {
+            method: 'POST',
+
+            headers: {
+              'Content-Type':
+                'application/json',
+
+              'bypass-tunnel-reminder':
+                'true',
+            },
+
+            body:
+              JSON.stringify(
+                requestBody
+              ),
+          }
+        );
+
+
+      // ========================================================
+      // STEP 4 — BACA RAW RESPONSE
+      // ========================================================
+
+      const responseText =
+        await pyResponse.text();
+
+
+      console.log(
+        '[AI Recommendation] FastAPI HTTP status:',
+        pyResponse.status
+      );
+
+
+      console.log(
+        '[AI Recommendation] FastAPI raw response:',
+        responseText
+      );
+
+
+      if (!pyResponse.ok) {
+        console.error(
+          '============================================================'
+        );
+        console.error(
+          '[DIAGNOSTIK KONEKSI] FE <-> RESOLVER <-> FASTAPI BACKEND TERHUBUNG 100%!'
+        );
+        console.error(
+          `[DIAGNOSTIK KONEKSI] Namun FastAPI melempar error status HTTP ${pyResponse.status}:`,
+          responseText
+        );
+        console.error(
+          '============================================================'
+        );
+
+        let diagMsg = `[KONEKSI OK] Backend melempar error HTTP ${pyResponse.status}`;
+        if (responseText.includes('429') || responseText.includes('Quota exceeded') || responseText.includes('RESOURCE_EXHAUSTED')) {
+          diagMsg = `[KONEKSI OK 100%] Gagal di Gemini AI: Quota Limit 429 Habis. Ganti API Key di .env untuk mengatasi.`;
+        } else if (responseText.includes('403') || responseText.includes('PERMISSION_DENIED')) {
+          diagMsg = `[KONEKSI OK 100%] Gagal di Gemini AI: API Key (HTTP 403) Tidak Valid. Perbarui API Key di .env.`;
+        }
+
+        return {
+          success: false,
+          errorType: 'AI_MODEL_LIMIT',
+          status: pyResponse.status,
+          message: diagMsg,
+          rawError: responseText.substring(0, 200),
+          subtasks: []
+        };
+      }
+
+
+      // ========================================================
+      // STEP 5 — PARSE JSON
+      // ========================================================
+
+      let resJson;
+
+
+      try {
+
+        resJson =
+          JSON.parse(
+            responseText
+          );
+
+      } catch (error) {
+
+        console.error(
+          '[AI Recommendation] FastAPI response bukan JSON:',
+          error
+        );
+
+        return [];
+      }
+
+
+      console.log(
+        '[AI Recommendation] Parsed response:',
+        JSON.stringify(
+          resJson,
+          null,
+          2
+        )
+      );
+
+
+      // ========================================================
+      // STEP 6 — EXTRACT SUBTASKS
+      // ========================================================
+
+      const rawSubtasks =
+        extractSubtasksFromAIResponse(
+          resJson
+        );
+
+
+      console.log(
+        '[AI Recommendation] Raw subtasks count:',
+        rawSubtasks.length
+      );
+
+
+      if (
+        rawSubtasks.length === 0
+      ) {
+
+        console.warn(
+          '[AI Recommendation] FastAPI 200 tetapi tidak ada subtasks.'
+        );
+
+        return [];
+      }
+
+
+      // ========================================================
+      // STEP 7 — EXISTING SUBTASKS
+      // ========================================================
+
+      const existingCounts = {};
+
+
+      for (
+        const st of existingSubtasks
+      ) {
+
+        const existingSummary =
+          cleanText(
+            st.fields?.summary ||
+            ''
+          );
+
+
+        if (!existingSummary) {
+          continue;
+        }
+
+
+        existingCounts[
+          existingSummary
+        ] =
+          (
+            existingCounts[
+            existingSummary
+            ] || 0
+          ) + 1;
+      }
+
+
+      // ========================================================
+      // STEP 8 — NORMALIZE
+      // ========================================================
+
+      const normalizedTasks =
+        rawSubtasks
+          .map((task, index) => {
+
+            let role =
+              'backend';
+
+
+            if (
+              typeof task === 'object'
+            ) {
+
+              role =
+                task?.role ||
+                task?.category ||
+                task?.team ||
+                'backend';
+            }
+
+
+            const category =
+              normalizeCategory(
+                role
+              );
+
+
+            return normalizeTask(
+              task,
+              index,
+              category,
+              issueKey,
+              existingSubtasks
+            );
+          })
+          .filter(
+            (task) =>
+              task.text &&
+              task.text.trim()
+          );
+
+
+      console.log(
+        '[AI Recommendation] Normalized tasks:',
+        JSON.stringify(
+          normalizedTasks,
+          null,
+          2
+        )
+      );
+
+
+      // ========================================================
+      // STEP 9 — FILTER DUPLICATE
+      // ========================================================
+
+      const remainingTasks = [];
+
+      const counts = {
+        ...existingCounts,
+      };
+
+
+      for (
+        const task of normalizedTasks
+      ) {
+
+        const taskClean =
+          cleanText(
+            task.text
+          );
+
+
+        if (
+          counts[taskClean] &&
+          counts[taskClean] > 0
+        ) {
+
+          counts[taskClean]--;
+
+          console.log(
+            '[AI Recommendation] Existing task skipped:',
+            task.text
+          );
+
+        } else {
+
+          remainingTasks.push(
+            task
+          );
+        }
+      }
+
+
+      // ========================================================
+      // STEP 10 — CONVERT TO GROUPS
+      // ========================================================
+
+      const groups =
+        convertSubtasksToGroups(
+          remainingTasks
+        );
+
+
+      console.log(
+        '[AI Recommendation] Remaining task count:',
+        remainingTasks.length
+      );
+
+
+      console.log(
+        '[AI Recommendation] FINAL GROUPS:',
+        JSON.stringify(
+          groups,
+          null,
+          2
+        )
+      );
+
+
+      console.log(
+        '[AI Recommendation] END'
+      );
+
+
+      return groups;
+
+    } catch (error) {
+
+      console.error(
+        '[AI Recommendation] ERROR:',
+        error
+      );
+
+      console.error(
+        '[AI Recommendation] STACK:',
+        error?.stack
+      );
+
+      return [];
+    }
+  }
+);
+
+
+// ============================================================
+// 3. CREATE SUBTASKS
+// ============================================================
+
+resolver.define(
+  'createSubtasks',
+  async (req) => {
+
+    const {
+      issueKey,
+      subtasks,
+    } = req.payload || {};
+
+
+    console.log(
+      '[Create Subtasks] issueKey:',
+      issueKey
+    );
+
+    console.log(
+      '[Create Subtasks] subtasks:',
+      JSON.stringify(
+        subtasks,
+        null,
+        2
+      )
+    );
+
+
+    if (
+      !issueKey ||
+      !Array.isArray(subtasks) ||
+      subtasks.length === 0
+    ) {
+
       return {
         success: false,
-        error: 'Subtask issue type tidak ditemukan',
+        error:
+          'Data tidak lengkap',
       };
     }
 
-    const results = [];
 
-    for (const rawTask of subtasks) {
-      let taskText;
-      if (typeof rawTask === 'string') {
-        taskText = rawTask.trim();
-      } else {
-        taskText = String(rawTask?.text || rawTask?.summary || '').trim();
-      }
+    try {
 
-      if (!taskText) continue;
+      // ========================================================
+      // GET ISSUE
+      // ========================================================
 
-      const bodyData = {
-        fields: {
-          summary: taskText,
-          project: {
-            id: projectId,
-          },
-          parent: {
-            key: issueKey,
-          },
-          issuetype: {
-            id: subtaskType.id,
-          },
-        },
-      };
+      const issueResponse =
+        await api
+          .asApp()
+          .requestJira(
+            route`/rest/api/3/issue/${issueKey}?fields=project`
+          );
 
-      const createResponse = await api
-        .asApp()
-        .requestJira(route`/rest/api/3/issue`, {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(bodyData),
-        });
 
-      if (createResponse.status === 201) {
-        const created = await createResponse.json();
-        results.push({
-          success: true,
-          key: created.key,
-          summary: taskText,
-        });
-      } else {
-        const errorText = await createResponse.text();
-        results.push({
+      if (!issueResponse.ok) {
+
+        const errorText =
+          await issueResponse.text();
+
+        return {
           success: false,
-          error: errorText,
-          summary: taskText,
-        });
+
+          error:
+            `Gagal mengambil issue: ${errorText}`,
+        };
       }
+
+
+      const issueData =
+        await issueResponse.json();
+
+
+      const projectId =
+        issueData.fields?.project?.id;
+
+
+      if (!projectId) {
+
+        return {
+          success: false,
+          error:
+            'Project ID tidak ditemukan',
+        };
+      }
+
+
+      // ========================================================
+      // GET PROJECT ISSUE TYPES
+      // ========================================================
+
+      const projectResponse =
+        await api
+          .asApp()
+          .requestJira(
+            route`/rest/api/3/project/${projectId}`
+          );
+
+
+      if (!projectResponse.ok) {
+
+        const errorText =
+          await projectResponse.text();
+
+        return {
+          success: false,
+
+          error:
+            `Gagal mengambil project: ${errorText}`,
+        };
+      }
+
+
+      const projectData =
+        await projectResponse.json();
+
+
+      const subtaskType =
+        (
+          projectData.issueTypes ||
+          []
+        ).find(
+          (type) =>
+            type.subtask === true
+        );
+
+
+      if (!subtaskType) {
+
+        return {
+          success: false,
+
+          error:
+            'Subtask issue type tidak ditemukan',
+        };
+      }
+
+
+      // ========================================================
+      // CREATE SUBTASKS
+      // ========================================================
+
+      const results = [];
+
+
+      for (
+        const rawTask of subtasks
+      ) {
+
+        let taskText;
+
+
+        if (
+          typeof rawTask === 'string'
+        ) {
+
+          taskText =
+            rawTask.trim();
+
+        } else {
+
+          taskText =
+            String(
+              rawTask?.text ||
+              rawTask?.summary ||
+              ''
+            ).trim();
+        }
+
+
+        if (!taskText) {
+          continue;
+        }
+
+
+        const assigneeName =
+          rawTask?.assigneeName ||
+          rawTask?.assigned_to ||
+          '';
+
+        let assigneeField = undefined;
+
+        if (assigneeName) {
+          try {
+            const userSearchRes = await api
+              .asApp()
+              .requestJira(
+                route`/rest/api/3/user/search?query=${encodeURIComponent(assigneeName)}`
+              );
+            if (userSearchRes.ok) {
+              const users = await userSearchRes.json();
+              if (Array.isArray(users) && users.length > 0) {
+                const matchedUser =
+                  users.find(
+                    (u) =>
+                      u.displayName?.toLowerCase().trim() ===
+                      assigneeName.toLowerCase().trim()
+                  ) || users[0];
+                if (matchedUser?.accountId) {
+                  assigneeField = {
+                    accountId: matchedUser.accountId,
+                    id: matchedUser.accountId,
+                  };
+                  console.log(
+                    `[Create Subtasks] Auto-assigning to ${matchedUser.displayName} (${matchedUser.accountId})`
+                  );
+                }
+              }
+            }
+          } catch (userErr) {
+            console.warn(
+              `[Create Subtasks] Could not resolve assignee accountId for ${assigneeName}:`,
+              userErr
+            );
+          }
+        }
+
+        const bodyData = {
+          fields: {
+
+            summary:
+              taskText,
+
+            project: {
+              id: projectId,
+            },
+
+            parent: {
+              key: rawTask?.parent_key || rawTask?.parentKey || issueKey,
+            },
+
+            issuetype: {
+              id: subtaskType.id,
+            },
+
+            ...(assigneeField ? { assignee: assigneeField } : {}),
+
+          },
+        };
+
+
+        console.log(
+          '[Create Subtasks] Creating:',
+          taskText
+        );
+
+
+        const createResponse =
+          await api
+            .asApp()
+            .requestJira(
+              route`/rest/api/3/issue`,
+              {
+                method: 'POST',
+
+                headers: {
+                  Accept:
+                    'application/json',
+
+                  'Content-Type':
+                    'application/json',
+                },
+
+                body:
+                  JSON.stringify(
+                    bodyData
+                  ),
+              }
+            );
+
+
+        if (
+          createResponse.status === 201
+        ) {
+
+          const created =
+            await createResponse.json();
+
+
+          results.push({
+            success: true,
+            key: created.key,
+            summary: taskText,
+          });
+
+
+          console.log(
+            '[Create Subtasks] SUCCESS:',
+            created.key
+          );
+
+        } else {
+
+          const errorText =
+            await createResponse.text();
+
+
+          console.error(
+            '[Create Subtasks] FAILED:',
+            errorText
+          );
+
+
+          results.push({
+            success: false,
+            error: errorText,
+            summary: taskText,
+          });
+        }
+      }
+
+
+      const createdKeys =
+        results
+          .filter(
+            (item) =>
+              item.success
+          )
+          .map(
+            (item) =>
+              item.key
+          );
+
+
+      return {
+        success:
+          createdKeys.length > 0,
+
+        createdKeys,
+
+        results,
+      };
+
+    } catch (error) {
+
+      console.error(
+        '[Create Subtasks] ERROR:',
+        error
+      );
+
+
+      return {
+        success: false,
+
+        error:
+          error?.message ||
+          String(error),
+      };
     }
-
-    const createdKeys = results
-      .filter((item) => item.success)
-      .map((item) => item.key);
-
-    return {
-      success: createdKeys.length > 0,
-      createdKeys,
-      results,
-    };
-
-  } catch (error) {
-    return {
-      success: false,
-      error: error?.message || String(error),
-    };
   }
-});
+);
 
 
 // ============================================================
 // EXPORT
 // ============================================================
 
-export const handler = resolver.getDefinitions();
+export const handler =
+  resolver.getDefinitions();
