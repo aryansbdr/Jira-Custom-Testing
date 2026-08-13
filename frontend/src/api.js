@@ -1,5 +1,4 @@
-// frontend/src/api.js
-const BASE_URL = 'https://scroll-travel-comm-compare.trycloudflare.com';
+const BASE_URL = 'https://virginia-off-anniversary-unity.trycloudflare.com';
 
 // 1. Ambil info & deskripsi Epic
 export const getEpicInfo = async (epicKey) => {

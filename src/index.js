@@ -1176,7 +1176,7 @@ resolver.define('getEpicStoryDetails', async (req) => {
 resolver.define('exportExcelReport', async (req) => {
   const payload = req.payload || {};
   const FASTAPI_REPORT_URL =
-    'https://racial-gibraltar-steel-facial.trycloudflare.com/api/v1/reporting/export-excel';
+    'https://virginia-off-anniversary-unity.trycloudflare.com/api/v1/reporting/export-excel';
 
   try {
     console.log('[Export Excel] Calling Python Excel Reporter:', FASTAPI_REPORT_URL);
@@ -1368,7 +1368,7 @@ resolver.define(
       // ========================================================
 
       const FASTAPI_URL =
-        "https://production-surprising-observed-qui.trycloudflare.com/api/v1/predict";
+        "https://virginia-off-anniversary-unity.trycloudflare.com/api/v1/predict";
 
       console.log('========================================');
       console.log('[DEBUG JIRA → FASTAPI]');
