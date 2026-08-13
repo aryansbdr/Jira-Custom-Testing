@@ -451,33 +451,70 @@ class JiraRestClient(IJiraClient):
             num_id = key
 
         if num_id:
-            # 1. Try as Dashboard ID
+            # 1. Try as Dashboard ID (Jira Server/DC & Cloud)
             try:
-                d_res = requests.get(f"{base_url}/rest/dashboards/1.0/{num_id}", headers=headers, auth=auth, timeout=6)
+                d_res = requests.get(f"{base_url}/rest/dashboards/1.0/{num_id}", headers=headers, auth=auth, timeout=8)
+                if d_res.status_code != 200:
+                    d_res = requests.get(f"{base_url}/rest/api/2/dashboard/{num_id}", headers=headers, auth=auth, timeout=8)
+
                 if d_res.status_code == 200:
                     d_data = d_res.json()
-                    dash_title = d_data.get("title") or f"Dashboard {num_id}"
-                    gadgets = d_data.get("gadgets", [])
+                    dash_title = d_data.get("title") or d_data.get("name") or f"Dashboard {num_id}"
+                    gadgets = d_data.get("gadgets", []) or d_data.get("items", [])
                     found_board = None
                     found_sprint = None
                     found_filters = []
+                    found_projects = []
+
+                    def _extract_id_from_text(text: str, key_name: str) -> Optional[str]:
+                        if not text:
+                            return None
+                        m = re.search(rf'{key_name}=(\d+)', str(text))
+                        return m.group(1) if m else None
                     
                     for g in gadgets:
                         gid = g.get("id")
-                        g_res = requests.get(f"{base_url}/rest/dashboards/1.0/{num_id}/gadget/{gid}", headers=headers, auth=auth, timeout=4)
-                        if g_res.status_code == 200:
-                            gd = g_res.json()
-                            props = gd.get("context", {}).get("dashboardItem", {}).get("properties", {})
-                            user_prefs = {f.get("name"): f.get("value") for f in gd.get("userPrefs", {}).get("fields", [])}
-                            rv_id = props.get("rapidViewId") or user_prefs.get("rapidViewId")
-                            sp_id = props.get("sprintId") or user_prefs.get("sprintId")
-                            fid = props.get("filterId") or user_prefs.get("filterId")
-                            if rv_id and not found_board:
-                                found_board = rv_id
-                            if sp_id and sp_id != "auto" and not found_sprint:
-                                found_sprint = sp_id
-                            if fid and fid not in found_filters:
-                                found_filters.append(fid)
+                        # Check direct gadget object in list first
+                        g_url = g.get("gadgetUrl") or g.get("uri") or ""
+                        rendered_url = g.get("renderedGadgetUrl") or ""
+                        
+                        # Inspect params/userPrefs inside g
+                        direct_prefs = g.get("userPrefs") or {}
+                        if isinstance(direct_prefs, list):
+                            direct_prefs = {f.get("name"): f.get("value") for f in direct_prefs if isinstance(f, dict)}
+
+                        rv_id = direct_prefs.get("rapidViewId") or direct_prefs.get("boardId") or _extract_id_from_text(rendered_url, "rapidViewId")
+                        sp_id = direct_prefs.get("sprintId") or _extract_id_from_text(rendered_url, "sprintId")
+                        fid = direct_prefs.get("filterId") or direct_prefs.get("searchId") or _extract_id_from_text(rendered_url, "filterId") or _extract_id_from_text(rendered_url, "id")
+
+                        # If not found directly, fetch gadget details
+                        if gid and (not rv_id and not sp_id and not fid):
+                            try:
+                                g_res = requests.get(f"{base_url}/rest/dashboards/1.0/{num_id}/gadget/{gid}", headers=headers, auth=auth, timeout=4)
+                                if g_res.status_code == 200:
+                                    gd = g_res.json()
+                                    props = gd.get("context", {}).get("dashboardItem", {}).get("properties", {})
+                                    up_fields = gd.get("userPrefs", {})
+                                    if isinstance(up_fields, dict) and "fields" in up_fields:
+                                        user_prefs = {f.get("name"): f.get("value") for f in up_fields.get("fields", []) if isinstance(f, dict)}
+                                    elif isinstance(up_fields, dict):
+                                        user_prefs = up_fields
+                                    else:
+                                        user_prefs = {}
+
+                                    r_url = gd.get("renderedGadgetUrl") or gd.get("gadgetUrl") or ""
+                                    rv_id = props.get("rapidViewId") or user_prefs.get("rapidViewId") or props.get("boardId") or user_prefs.get("boardId") or _extract_id_from_text(r_url, "rapidViewId")
+                                    sp_id = props.get("sprintId") or user_prefs.get("sprintId") or _extract_id_from_text(r_url, "sprintId")
+                                    fid = props.get("filterId") or user_prefs.get("filterId") or props.get("searchId") or user_prefs.get("searchId") or _extract_id_from_text(r_url, "filterId") or _extract_id_from_text(r_url, "id")
+                            except Exception:
+                                pass
+
+                        if rv_id and str(rv_id).isdigit() and not found_board:
+                            found_board = str(rv_id)
+                        if sp_id and str(sp_id).isdigit() and sp_id != "auto" and not found_sprint:
+                            found_sprint = str(sp_id)
+                        if fid and str(fid).isdigit() and str(fid) not in found_filters:
+                            found_filters.append(str(fid))
 
                     return {
                         "type": "dashboard",
@@ -487,8 +524,8 @@ class JiraRestClient(IJiraClient):
                         "sprint_id": found_sprint,
                         "filter_ids": found_filters,
                     }
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Warning: Dashboard resolution for {num_id} error: {e}")
 
             # 2. Try as Agile Board ID
             try:
@@ -664,29 +701,46 @@ class JiraRestClient(IJiraClient):
                 except Exception as e:
                     print(f"Warning: Dynamic Agile Sprint fetch for board {board_id} failed: {e}")
 
-        # If Filter ID was matched
-        if not issues_raw and target_type == "filter" and target_info.get("jql"):
-            jql = target_info["jql"]
-            fields_to_fetch = f"summary,status,assignee,parent,issuetype,{settings.JIRA_STORY_POINTS_FIELD}"
-            search_url = f"{base_jira_url}/rest/api/{api_ver}/search/jql" if self._is_cloud() else f"{base_jira_url}/rest/api/2/search"
-            try:
-                res = requests.get(
-                    search_url,
-                    headers=headers,
-                    auth=auth,
-                    params={"jql": jql, "fields": fields_to_fetch, "maxResults": 250},
-                    timeout=45,
-                )
-                if res.status_code == 200:
-                    issues_raw = res.json().get("issues", [])
-            except Exception as e:
-                print(f"Warning: Filter JQL search failed: {e}")
+        # If Filter IDs were found in Dashboard gadgets (e.g. Filter Results Gadget)
+        if not issues_raw and (target_info.get("filter_ids") or (target_type == "filter" and target_info.get("jql"))):
+            filter_ids = target_info.get("filter_ids", [])
+            if target_type == "filter" and target_info.get("id"):
+                filter_ids = [target_info["id"]]
+
+            for fid in filter_ids:
+                try:
+                    f_res = requests.get(f"{base_jira_url}/rest/api/2/filter/{fid}", headers=headers, auth=auth, timeout=8)
+                    if f_res.status_code == 200:
+                        f_data = f_res.json()
+                        filter_jql = f_data.get("jql")
+                        if filter_jql:
+                            fields_to_fetch = f"summary,status,assignee,parent,issuetype,{settings.JIRA_STORY_POINTS_FIELD}"
+                            search_url = f"{base_jira_url}/rest/api/{api_ver}/search/jql" if self._is_cloud() else f"{base_jira_url}/rest/api/2/search"
+                            res = requests.get(
+                                search_url,
+                                headers=headers,
+                                auth=auth,
+                                params={"jql": filter_jql, "fields": fields_to_fetch, "maxResults": 250},
+                                timeout=45,
+                            )
+                            if res.status_code == 200:
+                                issues_raw = res.json().get("issues", [])
+                                if issues_raw:
+                                    root_summary = f"{target_info.get('title', 'Dashboard')} - Filter: {f_data.get('name')}"
+                                    break
+                except Exception as e:
+                    print(f"Warning: Fetching issues by filter {fid} failed: {e}")
 
         # Fallback to JQL Search API if issues_raw not populated by Agile API
         if not issues_raw:
             fields_to_fetch = f"summary,status,assignee,parent,issuetype,{settings.JIRA_STORY_POINTS_FIELD}"
             if is_dashboard:
-                jql = 'sprint in openSprints() AND issuetype in subTaskIssueTypes() ORDER BY assignee ASC, status ASC'
+                # Scope to dashboard title if it contains project/board identifier
+                dash_clean_title = re.sub(r'[^\w\s-]', '', target_info.get("title", "")).strip()
+                if dash_clean_title and dash_clean_title.lower() not in ("dashboard", f"dashboard {root_key}"):
+                    jql = f'(project = "{dash_clean_title}" OR summary ~ "{dash_clean_title}") AND sprint in openSprints() AND issuetype in subTaskIssueTypes() ORDER BY assignee ASC, status ASC'
+                else:
+                    jql = 'sprint in openSprints() AND issuetype in subTaskIssueTypes() ORDER BY assignee ASC, status ASC'
             elif is_project_level:
                 jql = f'project = "{root_key}" AND issuetype in subTaskIssueTypes() ORDER BY parent ASC'
                 root_summary = f"Seluruh Subtask & Epic Sprint Project {root_key}"

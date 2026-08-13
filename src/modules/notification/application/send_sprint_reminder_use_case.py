@@ -118,27 +118,25 @@ class SendSprintReminderUseCase:
         # 4. Format Sisa Waktu string
         if real_days_remaining > 0:
             due_info = f" (Due: {due_date_str})" if due_date_str else ""
-            time_display = f"⏳ <b>Sisa Waktu:</b> {real_days_remaining} Hari Lagi{due_info}"
+            time_display = f"Sisa Waktu: <b>{real_days_remaining} Hari Kerja</b>{due_info}"
         elif real_days_remaining == 0:
-            time_display = "🚨 <b>Sisa Waktu:</b> <b>Hari Ini Terakhir (Due Today)!</b> ⏳"
+            time_display = "Sisa Waktu: <b>Hari Ini Terakhir (Due Today)</b>"
         else:
-            time_display = f"⚠️ <b>Status Waktu:</b> <b>Overdue {abs(real_days_remaining)} Hari!</b>"
+            time_display = f"Status Waktu: <b>Overdue {abs(real_days_remaining)} Hari</b>"
 
-        # 5. Construct Rich HTML Message
+        # 5. Construct Clean, Professional HTML Message
         message = (
-            f"🚨 <b>SPRINT REMINDER & ACTION ITEMS</b> 🚨\n"
-            f"------------------------------------------------\n"
-            f"🎯 <b>Target:</b> {epic_key} ({real_sprint_name})\n"
+            f"<b>SPRINT PROGRESS REPORT</b>\n"
+            f"Target: <b>{epic_key}</b> | {real_sprint_name}\n"
             f"{time_display}\n\n"
-            f"📊 <b>RANGKUMAN UTAMA SPRINT:</b>\n"
-            f"• Total Subtask: {total_tasks} task\n"
-            f"• Selesai (Done): {done_tasks} task ({pct_done}%)\n"
-            f"• Sisa Pending: {pending_tasks} task\n"
-            f"------------------------------------------------\n"
+            f"<b>Ringkasan Sprint:</b>\n"
+            f"• Total Subtask : {total_tasks}\n"
+            f"• Selesai (Done): {done_tasks} ({pct_done}%)\n"
+            f"• Pending       : {pending_tasks}\n\n"
         )
 
         if pending_tasks > 0:
-            message += "👥 <b>DAFTAR TUGAS PENDING PER DEVELOPER:</b>\n\n"
+            message += "<b>Daftar Tugas Pending:</b>\n\n"
 
             # Sort members: active with tasks first, unassigned last
             sorted_assignees = sorted(
@@ -157,11 +155,11 @@ class SendSprintReminderUseCase:
                 
                 # Header per developer with auto-tag
                 if assignee.lower() == "unassigned":
-                    dev_header = f"⚠️ <b>Unassigned Tasks</b> (<i>{len(tasks)} Task Belum Diambil</i>):"
+                    dev_header = f"<b>Belum Diambil (Unassigned)</b> ({len(tasks)} Task):"
                 else:
-                    tag_str = f"<b>{tag}</b> " if tag else ""
+                    tag_str = f"{tag} " if tag else ""
                     role_str = f" - {role}" if role else ""
-                    dev_header = f"👤 {tag_str}<b>{assignee}</b>{role_str} (<i>{len(tasks)} Task Pending</i>):"
+                    dev_header = f"<b>{tag_str}{assignee}</b>{role_str} ({len(tasks)} Task):"
 
                 message += f"{dev_header}\n"
 
@@ -170,15 +168,15 @@ class SendSprintReminderUseCase:
                     t_key = t.get("key", "")
                     t_sum = t.get("summary", "")
                     t_stat = t.get("status", "To Do")
-                    message += f"  • <code>[{t_key}]</code> {t_sum} — <i>({t_stat})</i>\n"
+                    message += f"• <code>[{t_key}]</code> {t_sum} <i>({t_stat})</i>\n"
 
                 if len(tasks) > 5:
-                    message += f"  <i>...dan {len(tasks) - 5} task lainnya</i>\n"
+                    message += f"<i>...dan {len(tasks) - 5} task lainnya</i>\n"
                 message += "\n"
 
-            message += "<i>Mohon tim dapat mengejar penyelesaian sebelum Sprint Review! 🚀</i>"
+            message += "<i>Mohon tim menindaklanjuti tugas pending sebelum akhir sprint.</i>"
         else:
-            message += "🎉 <b>LUAR BIASA! Seluruh task pada Sprint/Epic ini telah Selesai (100% Done)!</b> 🚀"
+            message += "<i>Seluruh subtask pada sprint ini telah selesai (100% Done).</i>"
 
         # Send via configured notification client
         success = self.notification_client.send_message(

@@ -18,6 +18,7 @@ env/
 # Output Reports & Local Temp Files
 workload_report_*.xlsx
 Laporan_*.xlsx
+~$*.xlsx
 *.log
 
 # Databases (Exclude temporary databases, but KEEP pre-injected RAG Knowledge Base)
