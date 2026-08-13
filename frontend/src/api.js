@@ -1,4 +1,4 @@
-const BASE_URL = 'https://virginia-off-anniversary-unity.trycloudflare.com';
+const BASE_URL = 'https://seattle-velvet-exploration-compete.trycloudflare.com';
 
 // 1. Ambil info & deskripsi Epic
 export const getEpicInfo = async (epicKey) => {
