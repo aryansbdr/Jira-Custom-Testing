@@ -105,25 +105,62 @@ def export_excel_report(req: ExportExcelRequest):
 
             # Build epic / stories progress
             stories_progress = []
-            for st in (req.stories or []):
-                st_key = st.get("key", "")
-                st_subs = [s for s in subtasks if s.get("parent_key") == st_key] or st.get("subtasks", [])
-                st_todo = sum(1 for s in st_subs if str(s.get("status", "")).lower() in ("to do", "todo", "open"))
-                st_done = sum(1 for s in st_subs if str(s.get("status", "")).lower() in ("done", "closed", "resolved"))
-                st_prog = len(st_subs) - st_todo - st_done
-                st_tot = len(st_subs)
-                st_pct = round((st_done / st_tot * 100), 1) if st_tot > 0 else 0.0
+            if req.stories:
+                for st in req.stories:
+                    st_key = st.get("key", "")
+                    st_subs = [s for s in subtasks if s.get("parent_key") == st_key] or st.get("subtasks", [])
+                    st_todo = sum(1 for s in st_subs if str(s.get("status", "")).lower() in ("to do", "todo", "open", "backlog"))
+                    st_done = sum(1 for s in st_subs if str(s.get("status", "")).lower() in ("done", "closed", "resolved", "verified"))
+                    st_prog = len(st_subs) - st_todo - st_done
+                    st_tot = len(st_subs)
+                    st_pct = round((st_done / st_tot * 100), 1) if st_tot > 0 else 0.0
 
-                stories_progress.append({
-                    "key": st_key,
-                    "summary": st.get("summary", ""),
-                    "status": st.get("status", "To Do"),
-                    "todo": st_todo,
-                    "in_progress": st_prog,
-                    "done": st_done,
-                    "total": st_tot,
-                    "percent_done": st_pct,
-                })
+                    stories_progress.append({
+                        "key": st_key,
+                        "summary": st.get("summary", ""),
+                        "owner": st.get("owner") or st.get("assignee") or "-",
+                        "status": st.get("status", "To Do"),
+                        "todo": st_todo,
+                        "in_progress": st_prog,
+                        "done": st_done,
+                        "total": st_tot,
+                        "total_subtasks": st_tot,
+                        "percent_done": st_pct,
+                        "subtasks": st_subs,
+                    })
+            elif subtasks:
+                # Auto-group from detailed_subtasks by parent_key
+                parent_map = {}
+                for s in subtasks:
+                    p_key = s.get("parent_key") or "Parent Story"
+                    p_sum = s.get("parent_summary") or p_key
+                    if p_key not in parent_map:
+                        parent_map[p_key] = {
+                            "key": p_key,
+                            "summary": p_sum,
+                            "owner": s.get("parent_owner") or s.get("assignee") or "-",
+                            "todo": 0,
+                            "in_progress": 0,
+                            "done": 0,
+                            "total": 0,
+                            "total_subtasks": 0,
+                            "subtasks": [],
+                        }
+                    parent_map[p_key]["subtasks"].append(s)
+                    s_stat = str(s.get("status", "")).lower()
+                    if any(k in s_stat for k in ("done", "closed", "resolved", "complete")):
+                        parent_map[p_key]["done"] += 1
+                    elif any(k in s_stat for k in ("in progress", "progress", "review")):
+                        parent_map[p_key]["in_progress"] += 1
+                    else:
+                        parent_map[p_key]["todo"] += 1
+
+                for pm in parent_map.values():
+                    tot = len(pm["subtasks"])
+                    pm["total"] = tot
+                    pm["total_subtasks"] = tot
+                    pm["percent_done"] = round((pm["done"] / tot * 100), 1) if tot > 0 else 0.0
+                    stories_progress.append(pm)
 
             report_data = {
                 "root_key": req.root_key,
@@ -133,6 +170,9 @@ def export_excel_report(req: ExportExcelRequest):
                 "total_epics_count": req.total_epics_count or len(stories_progress),
                 "member_progress": member_progress,
                 "epic_progress": stories_progress,
+                "story_progress": stories_progress,
+                "stories": stories_progress,
+                "parent_progress": stories_progress,
                 "detailed_subtasks": subtasks,
             }
         else:

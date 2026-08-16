@@ -374,7 +374,35 @@ class ExcelReporter:
         ws.row_dimensions[sec2_header_row].height = 22
 
         # Extract story / parent progress data with robust fallback
-        raw_stories = report_data.get("story_progress") or report_data.get("stories") or report_data.get("parent_progress") or []
+        raw_stories = report_data.get("story_progress") or report_data.get("stories") or report_data.get("parent_progress") or report_data.get("epic_progress") or []
+        detailed_subtasks = report_data.get("detailed_subtasks", [])
+
+        # If stories list is not explicitly populated, auto-aggregate from detailed_subtasks
+        if not raw_stories and detailed_subtasks:
+            parent_map = {}
+            for sub in detailed_subtasks:
+                p_key = sub.get("parent_key") or "Parent Story"
+                p_sum = sub.get("parent_summary") or p_key
+                if p_key not in parent_map:
+                    parent_map[p_key] = {
+                        "key": p_key,
+                        "summary": p_sum,
+                        "owner": sub.get("parent_owner") or sub.get("assignee") or "-",
+                        "todo": 0,
+                        "in_progress": 0,
+                        "done": 0,
+                        "subtasks": []
+                    }
+                parent_map[p_key]["subtasks"].append(sub)
+                s_norm = str(sub.get("status", "")).lower()
+                if any(k in s_norm for k in ("done", "closed", "resolved", "complete", "selesai")):
+                    parent_map[p_key]["done"] += 1
+                elif any(k in s_norm for k in ("in progress", "in development", "in review", "progress")):
+                    parent_map[p_key]["in_progress"] += 1
+                else:
+                    parent_map[p_key]["todo"] += 1
+            raw_stories = list(parent_map.values())
+
         stories_data = []
         for st in raw_stories:
             if "todo" in st or "in_progress" in st:
