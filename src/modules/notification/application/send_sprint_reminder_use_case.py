@@ -136,43 +136,80 @@ class SendSprintReminderUseCase:
         )
 
         if pending_tasks > 0:
-            message += "<b>Daftar Tugas Pending:</b>\n\n"
+            message += "<b>Rincian Tugas Pending per Role & Anggota Tim:</b>\n\n"
 
-            # Sort members: active with tasks first, unassigned last
-            sorted_assignees = sorted(
-                [a for a in member_pending.keys() if a.lower() != "unassigned"],
-                key=lambda x: len(member_pending[x]),
-                reverse=True
-            )
-            if "Unassigned" in member_pending:
-                sorted_assignees.append("Unassigned")
+            # 1. Structure tasks: role -> developer -> parent_story -> list of subtasks
+            role_order = ["Frontend", "Backend", "Mobile", "QA", "General", "Unassigned"]
+            grouped_by_role = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
-            for assignee in sorted_assignees:
-                tasks = member_pending[assignee]
+            for assignee, tasks in member_pending.items():
                 clean_name = assignee.strip().upper()
                 tag = emp_tag_map.get(clean_name, "")
-                role = emp_role_map.get(clean_name, "")
-                
-                # Header per developer with auto-tag
-                if assignee.lower() == "unassigned":
-                    dev_header = f"<b>Belum Diambil (Unassigned)</b> ({len(tasks)} Task):"
-                else:
+                emp_role = emp_role_map.get(clean_name, "")
+
+                for t in tasks:
+                    sub_role = str(t.get("role") or "").strip().title()
+                    if not sub_role or sub_role == "-":
+                        sub_role = emp_role.title() if emp_role else "General"
+                    if assignee.lower() == "unassigned":
+                        sub_role = "Unassigned"
+
+                    # Normalize role name
+                    if "Front" in sub_role or "Web" in sub_role:
+                        canonical_role = "Frontend"
+                    elif "Back" in sub_role:
+                        canonical_role = "Backend"
+                    elif "Mob" in sub_role or "Android" in sub_role or "Ios" in sub_role:
+                        canonical_role = "Mobile"
+                    elif "Qa" in sub_role or "Test" in sub_role:
+                        canonical_role = "QA"
+                    elif sub_role == "Unassigned":
+                        canonical_role = "Unassigned"
+                    else:
+                        canonical_role = "General"
+
+                    p_key = t.get("parent_key") or "Parent Story"
+                    p_sum = t.get("parent_summary") or ""
+                    parent_label = f"[{p_key}] {p_sum}" if p_sum else f"[{p_key}]"
+
+                    grouped_by_role[canonical_role][assignee][parent_label].append(t)
+
+            # 2. Render structured blocks per role
+            sorted_roles = sorted(
+                grouped_by_role.keys(),
+                key=lambda r: role_order.index(r) if r in role_order else 99
+            )
+
+            for role_name in sorted_roles:
+                devs_dict = grouped_by_role[role_name]
+                if not devs_dict:
+                    continue
+
+                role_header = f"<b>━━━ 🔹 {role_name.upper()} ━━━</b>\n"
+                message += role_header
+
+                for assignee, parents_dict in devs_dict.items():
+                    clean_name = assignee.strip().upper()
+                    tag = emp_tag_map.get(clean_name, "")
                     tag_str = f"{tag} " if tag else ""
-                    role_str = f" - {role}" if role else ""
-                    dev_header = f"<b>{tag_str}{assignee}</b>{role_str} ({len(tasks)} Task):"
 
-                message += f"{dev_header}\n"
+                    tot_dev_tasks = sum(len(ts) for ts in parents_dict.values())
+                    if assignee.lower() == "unassigned":
+                        dev_header = f"👤 <b>Belum Diambil (Unassigned)</b> — <i>{tot_dev_tasks} Task</i>\n"
+                    else:
+                        dev_header = f"👤 <b>{tag_str}{assignee}</b> — <i>{tot_dev_tasks} Task</i>\n"
+                    message += dev_header
 
-                # List tasks under this developer (max 5 shown, rest summarized)
-                for t in tasks[:5]:
-                    t_key = t.get("key", "")
-                    t_sum = t.get("summary", "")
-                    t_stat = t.get("status", "To Do")
-                    message += f"• <code>[{t_key}]</code> {t_sum} <i>({t_stat})</i>\n"
-
-                if len(tasks) > 5:
-                    message += f"<i>...dan {len(tasks) - 5} task lainnya</i>\n"
-                message += "\n"
+                    for parent_title, t_list in parents_dict.items():
+                        message += f"  📦 <b>{parent_title}</b>\n"
+                        for t in t_list[:4]:
+                            t_key = t.get("key", "")
+                            t_sum = t.get("summary", "")
+                            t_stat = t.get("status", "To Do")
+                            message += f"     • <code>[{t_key}]</code> {t_sum} <i>({t_stat})</i>\n"
+                        if len(t_list) > 4:
+                            message += f"     <i>...dan {len(t_list) - 4} subtask lainnya</i>\n"
+                    message += "\n"
 
             message += "<i>Mohon tim menindaklanjuti tugas pending sebelum akhir sprint.</i>"
         else:
