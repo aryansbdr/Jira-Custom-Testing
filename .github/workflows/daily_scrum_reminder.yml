@@ -6,6 +6,8 @@ on:
     - cron: '45 1 * * 1-5'
     # 09:30 UTC = 16:30 WIB (Sore Wrap-up Harian, Senin-Jumat)
     - cron: '30 9 * * 1-5'
+    # Test cron trigger untuk jam 15:30 WIB (08:30 UTC)
+    - cron: '30 8 * * *'
   workflow_dispatch: # Tombol manual trigger di web GitHub Actions
 
 jobs:
