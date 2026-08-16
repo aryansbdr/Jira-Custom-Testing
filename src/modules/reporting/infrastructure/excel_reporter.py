@@ -311,12 +311,12 @@ class ExcelReporter:
 
             chart_bar.add_data(data_ref, titles_from_data=True)
             chart_bar.set_categories(cats_ref)
-            chart_bar.height = 13
-            chart_bar.width = 18
+            chart_bar.height = 11
+            chart_bar.width = 14
 
-            ws.add_chart(chart_bar, "J7")
+            ws.add_chart(chart_bar, "J6")
 
-        # 2. NATIVE PIE CHART: Overall Project Status Ratio (Placed at U7)
+        # 2. NATIVE PIE CHART: Overall Project Status Ratio (Placed at S6)
         pie_data_row = 250
         ws.cell(row=pie_data_row, column=1, value="Status")
         ws.cell(row=pie_data_row, column=2, value="Jumlah")
@@ -342,15 +342,15 @@ class ExcelReporter:
         pie_cats = Reference(ws, min_col=1, min_row=pie_data_row+1, max_row=pie_data_row+3)
         chart_pie.add_data(pie_data, titles_from_data=True)
         chart_pie.set_categories(pie_cats)
-        chart_pie.height = 13
-        chart_pie.width = 15
+        chart_pie.height = 11
+        chart_pie.width = 13
 
-        ws.add_chart(chart_pie, "U7")
+        ws.add_chart(chart_pie, "S6")
 
         # -------------------------------------------------------------
         # SECTION 2: PROGRESS PER PARENT STORY / EPIC (Below Section 1)
         # -------------------------------------------------------------
-        sec2_start = max(tot_member_row + 3, 26)
+        sec2_start = max(tot_member_row + 4, 22)
         ws.cell(row=sec2_start, column=1, value="2. PROGRESS PER PARENT STORY / EPIC").font = font_section_title
         ws.row_dimensions[sec2_start].height = 22
 
@@ -598,7 +598,7 @@ class ExcelReporter:
         # -------------------------------------------------------------
         # SECTION 3: RINCIAN SELURUH SUBTASK JIRA (Below Section 2 - No SP)
         # -------------------------------------------------------------
-        sec3_start = tot_story_row + 3
+        sec3_start = max(tot_story_row + 4, sec2_start + 16)
         ws.cell(row=sec3_start, column=1, value="3. RINCIAN LENGKAP SELURUH SUBTASK JIRA").font = font_section_title
         ws.row_dimensions[sec3_start].height = 22
 
@@ -693,7 +693,7 @@ class ExcelReporter:
         # 1. SECTION 2 CHART: Story Completion Vertical Stacked Column Chart (Placed at J{sec2_start})
         if len(stories_data) > 0:
             s_chart_start_row = 300
-            ws.cell(row=s_chart_start_row, column=1, value="Story Induk")
+            ws.cell(row=s_chart_start_row, column=1, value="Story")
             ws.cell(row=s_chart_start_row, column=2, value="To Do")
             ws.cell(row=s_chart_start_row, column=3, value="In Progress")
             ws.cell(row=s_chart_start_row, column=4, value="Done")
@@ -702,13 +702,15 @@ class ExcelReporter:
             chart_stories = stories_data[:15]
             for s_i, s_item in enumerate(chart_stories, 1):
                 s_curr_row = s_chart_start_row + s_i
-                s_key = s_item.get("key", "")
-                s_sum = s_item.get("summary", "")
-                label_text = f"[{s_key}] {s_sum[:25]}" if s_sum else f"[{s_key}]"
-                ws.cell(row=s_curr_row, column=1, value=label_text)
-                ws.cell(row=s_curr_row, column=2, value=s_item.get("todo", 0))
-                ws.cell(row=s_curr_row, column=3, value=s_item.get("in_progress", 0))
-                ws.cell(row=s_curr_row, column=4, value=s_item.get("done", 0))
+                s_key = str(s_item.get("key") or "").strip()
+                s_sum = str(s_item.get("summary") or "").strip()
+                label_text = f"[{s_key}] {s_sum[:20]}" if s_sum else (s_key or f"Story {s_i}")
+                
+                c_lbl = ws.cell(row=s_curr_row, column=1, value=label_text)
+                c_lbl.number_format = '@'
+                ws.cell(row=s_curr_row, column=2, value=int(s_item.get("todo", 0)))
+                ws.cell(row=s_curr_row, column=3, value=int(s_item.get("in_progress", 0)))
+                ws.cell(row=s_curr_row, column=4, value=int(s_item.get("done", 0)))
 
             chart_story = BarChart()
             chart_story.type = "col"
@@ -718,6 +720,11 @@ class ExcelReporter:
             chart_story.x_axis.title = "Story Induk (Fitur)"
             chart_story.y_axis.title = "Jumlah Subtask"
             chart_story.legend.legendPos = "r"
+
+            # Explicitly force category axis tick labels to be visible and positioned below each column
+            chart_story.x_axis.tickLblPos = "low"
+            chart_story.x_axis.tickLblSkip = 1
+            chart_story.x_axis.delete = False
 
             chart_story.dataLabels = DataLabelList()
             chart_story.dataLabels.showVal = True
@@ -737,8 +744,8 @@ class ExcelReporter:
                 chart_story.series[1].graphicalProperties.solidFill = "2E75B6"  # In Progress
                 chart_story.series[2].graphicalProperties.solidFill = "548235"  # Done
 
-            chart_story.height = 14
-            chart_story.width = 24
+            chart_story.height = 12
+            chart_story.width = 22
 
             ws.add_chart(chart_story, f"J{sec2_start}")
 
