@@ -1,11 +1,8 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { invoke, view } from '@forge/bridge';
 import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
+  PieChart,
+  Pie,
   Tooltip,
   Legend,
   ResponsiveContainer,
@@ -246,6 +243,15 @@ export function SquadReport() {
       { name: 'Done', Done: metrics.doneCount }
     ];
   }, [metrics]);
+
+  const memberPieCharts = metrics.memberList.map((member) => ({
+    name: member.name,
+    data: [
+    { name: 'To Do', value: member.todo, color: '#7A869A' },
+    { name: 'In Progress', value: member.inProgress, color: '#579DFF' },
+    { name: 'Done', value: member.done, color: '#36B37E' }
+  ]
+  }))
 
   // Pagination slice
   const paginatedItems = useMemo(() => {
@@ -730,24 +736,123 @@ export function SquadReport() {
               Monitoring beban kerja dan progres riil anggota tim pada sprint aktif.
             </div>
 
-            <div style={{ width: '100%', height: 260 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} margin={{ top: 10, right: 15, left: -10, bottom: 20 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--ds-border, #333C48)" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'var(--ds-text-subtle, #8C9BAB)' }} />
-                  <YAxis tick={{ fontSize: 11, fill: 'var(--ds-text-subtle, #8C9BAB)' }} allowDecimals={false} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#22272B', border: '1px solid #333C48', borderRadius: '4px', color: '#DCDFE4' }}
-                    formatter={(val, name) => [`${val} Subtask`, name]}
-                    labelFormatter={(label, payload) => payload?.[0]?.payload?.fullName || label}
-                  />
-                  <Legend verticalAlign="top" height={30} iconSize={10} wrapperStyle={{ fontSize: '11px', color: '#DCDFE4' }} />
-                  <Bar dataKey="To Do" fill="#7A869A" stackId="a" />
-                  <Bar dataKey="In Progress" fill="#579DFF" stackId="a" />
-                  <Bar dataKey="Done" fill="#36B37E" stackId="a" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <div style={{ width: '100%' }}>
+              {memberPieCharts.length === 0 ? (
+                <div style={{ color: '#8C9BAB', fontStyle: 'italic' }}>
+                  Belum ada assignee terdaftar.
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: '16px',
+            }}
+          >
+            {memberPieCharts.map((person) => (
+              <div
+                key={person.name}
+                style={{
+                  backgroundColor: 'rgba(255,255,255,0.02)',
+                  border: '1px solid #333C48',
+                  borderRadius: '8px',
+                  padding: '10px',
+                }}
+              >
+                <div
+                  style={{
+                    textAlign: 'center',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    color: '#DCDFE4',
+                    marginBottom: '8px',
+                  }}
+                >
+                  {person.name}
+                </div>
+
+                <div style={{ width: '100%', height: 170 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={person.data}
+                        dataKey="value"
+                        nameKey="name"
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={34}
+                        outerRadius={58}
+                        paddingAngle={2}
+                      >
+                        {person.data.map((entry, index) => (
+                          <Cell key={`${person.name}-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(value) => [`${value} Subtasks`, 'Jumlah']}
+                        contentStyle={{
+                          backgroundColor: '#22272B',
+                          border: '1px solid #333C48',
+                          borderRadius: '4px',
+                          color: '#DCDFE4',
+                        }}
+                     />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <div
+                  style={{
+                    marginTop: '8px',
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                    gap: '6px',
+                  }}
+                >
+                  {person.data.map((entry) => (
+                    <div
+                      key={`${person.name}-${entry.name}-stat`}
+                      style={{
+                        border: '1px solid #333C48',
+                        borderRadius: '6px',
+                        padding: '6px 4px',
+                        textAlign: 'center',
+                        backgroundColor: 'rgba(255,255,255,0.02)',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '4px',
+                          marginBottom: '2px',
+                        }}
+                      >
+                        <span
+                          style={{
+                            width: '8px',
+                            height: '8px',
+                            borderRadius: '50%',
+                            backgroundColor: entry.color,
+                            display: 'inline-block',
+                          }}
+                        />
+                        <span style={{ fontSize: '10px', color: '#8C9BAB' }}>
+                          {entry.name}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#DCDFE4' }}>
+                        {entry.value}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
           </div>
         </div>
 

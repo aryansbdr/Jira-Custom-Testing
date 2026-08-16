@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from 'react';
+<<<<<<< HEAD
+import { invoke, view, router } from '@forge/bridge'; 
+=======
 import { invoke, router } from '@forge/bridge'; 
+>>>>>>> 2239c07801b0fec768ead33c87ffa76895523331
 
 export default function SubTaskRecommendation({ issueKey }) {
   const [recommendations, setRecommendations] = useState([]);
@@ -34,6 +38,22 @@ export default function SubTaskRecommendation({ issueKey }) {
 
     if (res.success) {
       alert(`Berhasil menambahkan ${res.createdKeys.length} Sub-Task ke ${issueKey}!`);
+<<<<<<< HEAD
+
+      setRecommendations((prev) =>
+        prev.filter((r) => !selectedIds.includes(r.id))
+      );
+
+      setSelectedIds([]);
+
+  // Tunggu Jira selesai commit issue
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+  // Reload halaman Jira
+      await router.reload();
+    }
+    
+=======
       
       setRecommendations((prev) => prev.filter((r) => !selectedIds.includes(r.id)));
       setSelectedIds([]);
@@ -42,6 +62,7 @@ export default function SubTaskRecommendation({ issueKey }) {
     } else {
       alert('Gagal membuat sub-task');
     }
+>>>>>>> 2239c07801b0fec768ead33c87ffa76895523331
     setSubmitting(false);
   };
 
