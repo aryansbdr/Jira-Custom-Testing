@@ -532,11 +532,11 @@ function extractSubtasksFromAIResponse(resJson) {
             assignment?.assigned_subtasks
           )
             ? assignment.assigned_subtasks.map((st) => ({
-                ...st,
-                assigneeName: assignment.employee?.name || st.assigned_to,
-                assigneePn: assignment.employee?.pn || st.assigned_pn,
-                assigneeRole: assignment.employee?.role || st.assigned_role,
-              }))
+              ...st,
+              assigneeName: assignment.employee?.name || st.assigned_to,
+              assigneePn: assignment.employee?.pn || st.assigned_pn,
+              assigneeRole: assignment.employee?.role || st.assigned_role,
+            }))
             : []
       );
 
@@ -1176,7 +1176,7 @@ resolver.define('getEpicStoryDetails', async (req) => {
 resolver.define('exportExcelReport', async (req) => {
   const payload = req.payload || {};
   const FASTAPI_REPORT_URL =
-    'https://seattle-velvet-exploration-compete.trycloudflare.com/api/v1/reporting/export-excel';
+    'https://schedule-smallest-startup-upper.trycloudflare.com/api/v1/reporting/export-excel';
 
   try {
     console.log('[Export Excel] Calling Python Excel Reporter:', FASTAPI_REPORT_URL);
@@ -1368,7 +1368,7 @@ resolver.define(
       // ========================================================
 
       const FASTAPI_URL =
-        "https://seattle-velvet-exploration-compete.trycloudflare.com/api/v1/predict";
+        "https://four-algorithm-permits-lover.trycloudflare.com/api/v1/predict";
 
       console.log('========================================');
       console.log('[DEBUG JIRA → FASTAPI]');
