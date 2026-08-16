@@ -690,10 +690,10 @@ class ExcelReporter:
         # -------------------------------------------------------------
         # CHARTS FOR SECTION 2 & SECTION 3
         # -------------------------------------------------------------
-        # 1. SECTION 2 CHART: Story Completion Horizontal Stacked Bar Chart (Placed at J{sec2_start})
+        # 1. SECTION 2 CHART: Story Completion Vertical Stacked Column Chart (Placed at J{sec2_start})
         if len(stories_data) > 0:
             s_chart_start_row = 300
-            ws.cell(row=s_chart_start_row, column=1, value="Story")
+            ws.cell(row=s_chart_start_row, column=1, value="Story Induk")
             ws.cell(row=s_chart_start_row, column=2, value="To Do")
             ws.cell(row=s_chart_start_row, column=3, value="In Progress")
             ws.cell(row=s_chart_start_row, column=4, value="Done")
@@ -702,18 +702,21 @@ class ExcelReporter:
             chart_stories = stories_data[:15]
             for s_i, s_item in enumerate(chart_stories, 1):
                 s_curr_row = s_chart_start_row + s_i
-                ws.cell(row=s_curr_row, column=1, value=s_item.get("key") or s_item.get("summary", "")[:20])
+                s_key = s_item.get("key", "")
+                s_sum = s_item.get("summary", "")
+                label_text = f"[{s_key}] {s_sum[:25]}" if s_sum else f"[{s_key}]"
+                ws.cell(row=s_curr_row, column=1, value=label_text)
                 ws.cell(row=s_curr_row, column=2, value=s_item.get("todo", 0))
                 ws.cell(row=s_curr_row, column=3, value=s_item.get("in_progress", 0))
                 ws.cell(row=s_curr_row, column=4, value=s_item.get("done", 0))
 
             chart_story = BarChart()
-            chart_story.type = "bar"
+            chart_story.type = "col"
             chart_story.grouping = "stacked"
             chart_story.overlap = 100
             chart_story.title = "Progres Penyelesaian per Story Induk"
-            chart_story.x_axis.title = "Jumlah Subtask"
-            chart_story.y_axis.title = "Story Induk"
+            chart_story.x_axis.title = "Story Induk (Fitur)"
+            chart_story.y_axis.title = "Jumlah Subtask"
             chart_story.legend.legendPos = "r"
 
             chart_story.dataLabels = DataLabelList()
@@ -727,8 +730,15 @@ class ExcelReporter:
 
             chart_story.add_data(s_data_ref, titles_from_data=True)
             chart_story.set_categories(s_cats_ref)
+
+            # Apply semantic colors: To Do (Gray), In Progress (Blue), Done (Green)
+            if len(chart_story.series) >= 3:
+                chart_story.series[0].graphicalProperties.solidFill = "A6A6A6"  # To Do
+                chart_story.series[1].graphicalProperties.solidFill = "2E75B6"  # In Progress
+                chart_story.series[2].graphicalProperties.solidFill = "548235"  # Done
+
             chart_story.height = 14
-            chart_story.width = 18
+            chart_story.width = 24
 
             ws.add_chart(chart_story, f"J{sec2_start}")
 
