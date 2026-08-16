@@ -105,6 +105,8 @@ class GenerateSubtasksUseCase:
         mode: str = "free",
         existing_subtasks: List[str] = None,
         issue_key: Optional[str] = None,
+        assignee: Optional[str] = None,
+        assignee_role: Optional[str] = None,
     ) -> List[Subtask]:
         summary_lower = summary.lower()
 
@@ -115,6 +117,10 @@ class GenerateSubtasksUseCase:
             formatted_description = f"{description}\n\nSTRUCTURED AC CHUNKS:\n{chunk_summary_text}"
         else:
             formatted_description = description
+
+        # Inject Assignee Role Context if assigned engineer has specific role (especially Mobile/MCS)
+        if assignee_role and "mob" in assignee_role.lower():
+            formatted_description += f"\n\n[MOBILE ENGINEER ASSIGNED]: Story ini di-assign ke engineer mobile '{assignee or 'Mobile Dev'}'. Buat subtask 'MOBILE - <Title>' untuk UI Mobile App atau 'MCS - <Title>' untuk Mobile Channel Service / Backend API Mobile sesuai rincian AC."
 
         # Exception Rule: Exclude Test & Deployment tickets from subtask generation as requested
         skip_test_keywords = [
@@ -382,13 +388,13 @@ class GenerateSubtasksUseCase:
         # NOTE: 'app' excluded — it's a substring of 'mapping' causing false positives.
         mobile_context_keywords = [
             "pemrakarsa", "pemutus",
-            "mobile", "mobile app", "brispot", "android", "ios", "aplikasi",
+            "mobile", "mobile app", "brispot", "android", "ios", "aplikasi", "mcs", "prescreening"
         ]
-        has_mobile_context = any(kw in ac_text for kw in mobile_context_keywords)
+        has_mobile_context = any(kw in ac_text for kw in mobile_context_keywords) or (bool(assignee_role) and "mob" in assignee_role.lower())
 
         filtered_subtasks = []
         for sub in generated_subtasks:
-            # Drop hallucinated Mobile subtasks when the story has no mobile context
+            # Drop hallucinated Mobile subtasks when the story has no mobile context and no mobile assignee
             if sub.role == "mobile" and not has_mobile_context:
                 continue
             filtered_subtasks.append(sub)
