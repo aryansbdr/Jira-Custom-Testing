@@ -281,71 +281,75 @@ class ExcelReporter:
         # -------------------------------------------------------------
         # CHARTS: SIDE-BY-SIDE WITH CLEAN DIRECT DATA LABELS
         # -------------------------------------------------------------
-        chart_max_row = 9 + len(active_members) - 1 if len(active_members) > 0 else tot_member_row - 1
+        # 1. SECTION 1 CHARTS: Individual Donut Charts per Developer (Workload & Progress Activity)
+        chart_col_letters = ["J", "Q", "X", "AE"]
+        member_progress = report_data.get("member_progress", [])
+        active_members = [
+            m for m in member_progress 
+            if str(m.get("name", "")).strip().lower() not in ("unassigned", "total", "total akumulasi tim", "-", "")
+        ][:3]
 
-        # 1. NATIVE CLUSTERED BAR CHART (Placed at J7)
-        if len(active_members) > 0:
-            chart_bar = BarChart()
-            chart_bar.type = "col"
-            chart_bar.style = 10
-            chart_bar.title = "Distribusi Status Subtask per Developer"
-            chart_bar.y_axis.title = "Jumlah Subtask"
+        for dev_idx, dev in enumerate(active_members):
+            dev_name = dev.get("name", f"Developer {dev_idx+1}")
+            dev_role = dev.get("role", "")
+            d_h_row = 260 + dev_idx * 5
 
-            # Legend at right side (never collides with title!)
-            chart_bar.legend.legendPos = "r"
+            ws.cell(row=d_h_row, column=1, value="Status")
+            ws.cell(row=d_h_row, column=2, value="Jumlah")
+            ws.cell(row=d_h_row + 1, column=1, value="To Do")
+            ws.cell(row=d_h_row + 1, column=2, value=int(dev.get("todo", 0)))
+            ws.cell(row=d_h_row + 2, column=1, value="In Progress")
+            ws.cell(row=d_h_row + 2, column=2, value=int(dev.get("in_progress", 0)))
+            ws.cell(row=d_h_row + 3, column=1, value="Done")
+            ws.cell(row=d_h_row + 3, column=2, value=int(dev.get("done", 0)))
 
-            # Sumbu X: explicitly show developer names at bottom
-            chart_bar.x_axis.tickLblPos = "low"
-            chart_bar.x_axis.delete = False
+            chart_dev = DoughnutChart()
+            chart_dev.title = f"{dev_name} ({dev_role})" if dev_role else dev_name
+            chart_dev.dataLabels = DataLabelList()
+            chart_dev.dataLabels.showPercent = True
+            chart_dev.dataLabels.showVal = False
+            chart_dev.dataLabels.showCatName = False
+            chart_dev.dataLabels.showSerName = False
+            chart_dev.legend.legendPos = "b"
 
-            # Direct Data Labels (only show value numbers cleanly!)
-            chart_bar.dataLabels = DataLabelList()
-            chart_bar.dataLabels.showVal = True
-            chart_bar.dataLabels.showCatName = False
-            chart_bar.dataLabels.showSerName = False
-            chart_bar.dataLabels.showPercent = False
-            chart_bar.dataLabels.showLegendKey = False
+            dev_data_ref = Reference(ws, min_col=2, min_row=d_h_row, max_row=d_h_row + 3)
+            dev_cats_ref = Reference(ws, min_col=1, min_row=d_h_row + 1, max_row=d_h_row + 3)
+            chart_dev.add_data(dev_data_ref, titles_from_data=True)
+            chart_dev.set_categories(dev_cats_ref)
+            chart_dev.height = 11
+            chart_dev.width = 11
 
-            data_ref = Reference(ws, min_col=3, max_col=5, min_row=8, max_row=chart_max_row)
-            cats_ref = Reference(ws, min_col=1, min_row=9, max_row=chart_max_row)
+            ws.add_chart(chart_dev, f"{chart_col_letters[dev_idx]}6")
 
-            chart_bar.add_data(data_ref, titles_from_data=True)
-            chart_bar.set_categories(cats_ref)
-            chart_bar.height = 11
-            chart_bar.width = 14
-
-            ws.add_chart(chart_bar, "J6")
-
-        # 2. NATIVE PIE CHART: Overall Project Status Ratio (Placed at S6)
+        # 2. Overall Sprint Status Doughnut Chart (Placed next to developer donuts)
         pie_data_row = 250
         ws.cell(row=pie_data_row, column=1, value="Status")
         ws.cell(row=pie_data_row, column=2, value="Jumlah")
-        ws.cell(row=pie_data_row+1, column=1, value="To Do")
-        ws.cell(row=pie_data_row+1, column=2, value=f"=C{tot_member_row}")
-        ws.cell(row=pie_data_row+2, column=1, value="In Progress")
-        ws.cell(row=pie_data_row+2, column=2, value=f"=D{tot_member_row}")
-        ws.cell(row=pie_data_row+3, column=1, value="Done")
-        ws.cell(row=pie_data_row+3, column=2, value=f"=E{tot_member_row}")
+        ws.cell(row=pie_data_row + 1, column=1, value="To Do")
+        ws.cell(row=pie_data_row + 1, column=2, value=f"=C{tot_member_row}")
+        ws.cell(row=pie_data_row + 2, column=1, value="In Progress")
+        ws.cell(row=pie_data_row + 2, column=2, value=f"=D{tot_member_row}")
+        ws.cell(row=pie_data_row + 3, column=1, value="Done")
+        ws.cell(row=pie_data_row + 3, column=2, value=f"=E{tot_member_row}")
 
-        chart_pie = PieChart()
+        chart_pie = DoughnutChart()
         chart_pie.title = "Proporsi Status Sprint Keseluruhan"
-        
-        # Clean Pie Data Labels: Percentage only on slices + Legend on right
         chart_pie.dataLabels = DataLabelList()
         chart_pie.dataLabels.showPercent = True
         chart_pie.dataLabels.showCatName = False
         chart_pie.dataLabels.showVal = False
         chart_pie.dataLabels.showSerName = False
-        chart_pie.legend.legendPos = "r"
+        chart_pie.legend.legendPos = "b"
 
-        pie_data = Reference(ws, min_col=2, min_row=pie_data_row, max_row=pie_data_row+3)
-        pie_cats = Reference(ws, min_col=1, min_row=pie_data_row+1, max_row=pie_data_row+3)
+        pie_data = Reference(ws, min_col=2, min_row=pie_data_row, max_row=pie_data_row + 3)
+        pie_cats = Reference(ws, min_col=1, min_row=pie_data_row + 1, max_row=pie_data_row + 3)
         chart_pie.add_data(pie_data, titles_from_data=True)
         chart_pie.set_categories(pie_cats)
         chart_pie.height = 11
-        chart_pie.width = 13
+        chart_pie.width = 11
 
-        ws.add_chart(chart_pie, "S6")
+        pie_col = chart_col_letters[min(len(active_members), 3)]
+        ws.add_chart(chart_pie, f"{pie_col}6")
 
         # -------------------------------------------------------------
         # SECTION 2: PROGRESS PER PARENT STORY / EPIC (Below Section 1)
