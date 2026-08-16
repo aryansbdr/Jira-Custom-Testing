@@ -81,16 +81,10 @@ class JiraRestClient(IJiraClient):
                     pass
         return 0.0
 
-    def get_epic_issues(self, epic_key: str) -> List[Story]:
-        epic_key = self._clean_key(epic_key)
-        if not epic_key or not self._is_issue_key(epic_key):
-            return []
-        # Jira Cloud has migrated search to /rest/api/3/search/jql, Server remains on /rest/api/2/search
-        if self._is_cloud():
-            url = f"{settings.JIRA_URL.rstrip('/')}/rest/api/3/search/jql"
-        else:
-            url = f"{settings.JIRA_URL.rstrip('/')}/rest/api/2/search"
-
+    def _execute_jql_search(
+        self, jql: str, fields: List[str], max_results: int = 100
+    ) -> List[dict]:
+        """Unified JQL search executing POST on Jira Cloud /rest/api/3/search/jql and GET on Jira Server /rest/api/2/search."""
         try:
             headers = self._get_headers()
             auth = self._get_auth()
@@ -98,33 +92,53 @@ class JiraRestClient(IJiraClient):
             print(f"Warning: Jira authentication skipped: {auth_err}")
             return []
 
-        jql = f'parent = "{epic_key}" OR "Epic Link" = "{epic_key}" ORDER BY rank ASC'
-
-        params = {
-            "jql": jql,
-            "fields": f"summary,description,{settings.JIRA_STORY_POINTS_FIELD},issuetype,status",
-            "maxResults": 100,
-        }
-
-        response = None
-        for attempt in range(2):
+        base_url = settings.JIRA_URL.rstrip("/")
+        if self._is_cloud():
+            # Jira Cloud: POST /rest/api/3/search/jql
+            url = f"{base_url}/rest/api/3/search/jql"
+            payload = {
+                "jql": jql,
+                "fields": fields if isinstance(fields, list) else [f.strip() for f in fields.split(",") if f.strip()],
+                "maxResults": max_results,
+            }
             try:
-                response = requests.get(
-                    url, headers=headers, params=params, auth=auth, timeout=25
-                )
-                if response.status_code == 200:
-                    break
-            except Exception as req_err:
-                if attempt == 1:
-                    print(f"Warning: Failed to fetch epic issues for {epic_key}: {req_err}")
-                    return []
-                time.sleep(1)
+                res = requests.post(url, headers=headers, json=payload, auth=auth, timeout=35)
+                if res.status_code == 200:
+                    return res.json().get("issues", [])
+                else:
+                    print(f"Warning: Jira Cloud search failed ({res.status_code}): {res.text[:200]}")
+            except Exception as e:
+                print(f"Warning: Jira Cloud search exception: {e}")
+        else:
+            # Jira Server / DC: GET /rest/api/2/search
+            url = f"{base_url}/rest/api/2/search"
+            params = {
+                "jql": jql,
+                "fields": ",".join(fields) if isinstance(fields, list) else fields,
+                "maxResults": max_results,
+            }
+            try:
+                res = requests.get(url, headers=headers, params=params, auth=auth, timeout=35)
+                if res.status_code == 200:
+                    return res.json().get("issues", [])
+                else:
+                    print(f"Warning: Jira Server search failed ({res.status_code}): {res.text[:200]}")
+            except Exception as e:
+                print(f"Warning: Jira Server search exception: {e}")
+
+        return []
+
+    def get_epic_issues(self, epic_key: str) -> List[Story]:
+        epic_key = self._clean_key(epic_key)
+        if not epic_key or not self._is_issue_key(epic_key):
+            return []
+
+        jql = f'parent = "{epic_key}" OR "Epic Link" = "{epic_key}" ORDER BY rank ASC'
+        fields = ["summary", "description", settings.JIRA_STORY_POINTS_FIELD, "issuetype", "status"]
+        issues_raw = self._execute_jql_search(jql, fields, max_results=100)
 
         stories = []
-
-        if response and response.status_code == 200:
-            data = response.json()
-            for item in data.get("issues", []):
+        for item in issues_raw:
                 fields = item.get("fields", {})
 
                 description_text = ""
@@ -749,19 +763,8 @@ class JiraRestClient(IJiraClient):
                 jql = f'parent = "{root_key}" OR "Epic Link" = "{root_key}" OR id = "{root_key}" ORDER BY parent ASC'
                 root_summary = root_key
 
-            search_url = f"{base_jira_url}/rest/api/{api_ver}/search/jql" if self._is_cloud() else f"{base_jira_url}/rest/api/2/search"
-            try:
-                res = requests.get(
-                    search_url,
-                    headers=headers,
-                    auth=auth,
-                    params={"jql": jql, "fields": fields_to_fetch, "maxResults": 250},
-                    timeout=45,
-                )
-                if res.status_code == 200:
-                    issues_raw = res.json().get("issues", [])
-            except Exception as e:
-                print(f"Warning: JQL search failed: {e}")
+            fields_list = ["summary", "status", "assignee", "parent", "issuetype", settings.JIRA_STORY_POINTS_FIELD]
+            issues_raw = self._execute_jql_search(jql, fields_list, max_results=250)
 
         # Fallback if single issue passed and JQL didn't catch subtasks directly
         if not issues_raw and not is_project_level:
