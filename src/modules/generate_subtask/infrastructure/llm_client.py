@@ -26,12 +26,21 @@ class LlmClient(ILlmClient):
     _SYSTEM_PROMPT = (
         "Role: BRI Scrum Master. Decompose User Story into subtasks strictly using AC terms and RAG DB naming style with standard english naming convention.\n\n"
         "RULES:\n"
-        "1. Prefix: 'BE -', 'WEB -', or 'Mobile -'\n"
-        "2. Exact AC Terms: Output subtasks STRICTLY based on features, components, modals, and endpoints explicitly stated in the AC description. NEVER invent unmentioned features, testing tasks, URL paths, or class names.\n"
-        "3. Verbs: Adopt action verbs from RAG DB patterns (Migration/Create/Design Spec/Connecting). Do NOT use informal Indonesian verbs.\n"
-        "4. CONSOLIDATION: Merge sibling items that share the same action verb and component type into ONE subtask using 'and' or '/'. Only split if functionally different.\n"
-        "5. PRESERVE DOMAIN TERMS: Do NOT translate Indonesian business/domain terms to English. Keep words like 'debitur' (NOT debtor), 'disposisi' (NOT disposition), 're-disposisi' (NOT re-disposition), 'prakarsa', 'pemrakarsa', 'pemutus', 'pencairan', 'korporasi', 'termin', 'rekening' exactly as written in the AC.\n"
-        "6. Output JSON format: {\"subtasks\":[{\"summary\":\"...   \",\"role\":\"backend|frontend|mobile\",\"story_points\":1.0}]}\n\n"
+        "1. Subtask Prefixes:\n"
+        "   - 'BE - <Title>': General Backend API / microservices / database.\n"
+        "   - 'WEB - <Title>': Web Frontend portal / UI / screens.\n"
+        "   - 'MOBILE - <Title>': Mobile Frontend Application (Android/iOS screens, layouts, activities, prescreening/pemrakarsa UI).\n"
+        "   - 'MCS - <Title>': Mobile Channel Service (Mobile Backend API / service middleware khusus mobile).\n"
+        "   - 'QA - <Title>': Quality Assurance / test execution.\n"
+        "2. Mobile & MCS Tasks:\n"
+        "   - If description/AC/To-Do explicitly mentions mobile tasks (e.g. Mobile UI, Android, iOS, or Pemrakarsa/Pemutus on Mobile), generate subtasks for role 'mobile' with prefix 'MOBILE - <Title>'.\n"
+        "   - If description/AC/To-Do mentions mobile API or backend channel service for mobile, generate subtasks with prefix 'MCS - <Title>' (MCS is Mobile Backend).\n"
+        "   - If team members/sprint contain employees with 'mobile' role, prioritize generating matching 'MOBILE -' or 'MCS -' subtasks based on the AC.\n"
+        "3. Exact AC Terms: Output subtasks STRICTLY based on features, components, modals, and endpoints explicitly stated in the AC description. NEVER invent unmentioned features, testing tasks, URL paths, or class names.\n"
+        "4. Verbs: Adopt action verbs from RAG DB patterns (Migration/Create/Design Spec/Connecting). Do NOT use informal Indonesian verbs.\n"
+        "5. CONSOLIDATION: Merge sibling items that share the same action verb and component type into ONE subtask using 'and' or '/'. Only split if functionally different.\n"
+        "6. PRESERVE DOMAIN TERMS: Do NOT translate Indonesian business/domain terms to English. Keep words like 'debitur', 'disposisi', 're-disposisi', 'prakarsa', 'pemrakarsa', 'pemutus', 'pencairan', 'korporasi', 'termin', 'rekening' exactly as written in the AC.\n"
+        "7. Output JSON format: {\"subtasks\":[{\"summary\":\"MOBILE - ... or MCS - ... or BE - ... or WEB - ...\",\"role\":\"backend|frontend|mobile|qa\",\"story_points\":1.0}]}\n\n"
     )
 
     def _get_gemini_api_keys(self) -> List[str]:
@@ -268,28 +277,37 @@ class LlmClient(ILlmClient):
             role_val = str(sub.get("role", "backend")).lower()
             raw_sp = sub.get("story_points", 1.0)
 
-            # Strip all leading role prefixes (BE -, WEB -, FE -, WEBAPP -, Mobile -, etc.)
-            clean_body = re.sub(r'^((be|web|fe|webapp|mobile)\s*-\s*)+', '', summary_text, flags=re.IGNORECASE).strip()
+            # Check if summary originally starts with MCS or Mobile
+            is_mcs_prefix = bool(re.match(r'^mcs\s*-\s*', summary_text, flags=re.IGNORECASE))
+            is_mobile_prefix = bool(re.match(r'^mobile\s*-\s*', summary_text, flags=re.IGNORECASE))
+
+            # Strip all leading role prefixes (BE -, WEB -, FE -, WEBAPP -, Mobile -, MCS -, etc.)
+            clean_body = re.sub(r'^((be|web|fe|webapp|mobile|mcs|qa)\s*-\s*)+', '', summary_text, flags=re.IGNORECASE).strip()
             clean_body_lower = clean_body.lower()
 
             # --- Role Resolution (LLM declaration first) ---
-            if "frontend" in role_val or "web" in role_val:
-                role_key = "frontend"
-            elif "mobile" in role_val:
+            if is_mcs_prefix:
                 role_key = "mobile"
-            else:
-                role_key = "backend"
-
-            if role_key in ("frontend", "mobile"):
+                prefix = "MCS - "
+            elif is_mobile_prefix or "mobile" in role_val or "android" in role_val or "ios" in role_val:
+                role_key = "mobile"
+                # If the body is explicitly about backend/service/API for mobile channel, use MCS -
+                if any(kw in clean_body_lower for kw in ["service", "api", "endpoint", "channel", "backend", "inquiry", "integrasi"]):
+                    prefix = "MCS - "
+                else:
+                    prefix = "MOBILE - "
+            elif "frontend" in role_val or "web" in role_val or "fe" == role_val:
+                role_key = "frontend"
                 if any(kw in clean_body_lower for kw in self._BACKEND_OVERRIDE_KEYWORDS):
                     role_key = "backend"
-
-            # Build final summary with the corrected role prefix
-            if role_key == "frontend":
-                prefix = "WEB - "
-            elif role_key == "mobile":
-                prefix = "Mobile - "
+                    prefix = "BE - "
+                else:
+                    prefix = "WEB - "
+            elif "qa" in role_val or "tester" in role_val:
+                role_key = "qa"
+                prefix = "QA - "
             else:
+                role_key = "backend"
                 prefix = "BE - "
 
             summary_text = f"{prefix}{clean_body}"
@@ -387,7 +405,6 @@ class LlmClient(ILlmClient):
             gap_subtasks = self._deduplicate_gap_subtasks(gap_subtasks, cloned_subtasks)
             return gap_subtasks
         except Exception as e:
-            last_exception = e
             return []
 
     _BANNED_GAP_VERBS = re.compile(

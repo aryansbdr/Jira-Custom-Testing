@@ -1,5 +1,5 @@
 import openpyxl
-from openpyxl.chart import BarChart, PieChart, Reference
+from openpyxl.chart import BarChart, PieChart, DoughnutChart, Reference
 from openpyxl.chart.label import DataLabelList
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import os
@@ -403,19 +403,30 @@ class ExcelReporter:
                     "total_subtasks": len(st_subtasks)
                 })
 
+        fill_parent_story = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+        font_parent_bold = Font(name="Segoe UI", size=10, bold=True, color="1F4E79")
+        font_subtask_indent = Font(name="Segoe UI", size=9, color="333333")
+        font_subtask_link = Font(name="Segoe UI", size=9, color="0563C1", underline="single")
+        font_subtask_role = Font(name="Segoe UI", size=9, italic=True, color="595959")
+
+        detailed_subtasks = report_data.get("detailed_subtasks", [])
+        parent_rows_indices = []
+
         s_row = sec2_header_row + 1
         for idx, st in enumerate(stories_data):
-            row_fill = fill_zebra if idx % 2 == 1 else PatternFill(fill_type=None)
             p_key = st.get("key", "")
+            p_sum = st.get("summary", "")
             jira_link = f"{base_jira_url}/browse/{p_key}"
 
+            # 1. PARENT STORY ROW (Header Level)
+            parent_rows_indices.append(s_row)
             c_key = ws.cell(row=s_row, column=1)
             c_key.value = f'=HYPERLINK("{jira_link}", "{p_key}")' if p_key else "-"
             c_key.font = font_link
             c_key.alignment = Alignment(horizontal="center", vertical="center")
 
-            c_sum = ws.cell(row=s_row, column=2, value=st.get("summary", ""))
-            c_sum.font = font_data
+            c_sum = ws.cell(row=s_row, column=2, value=p_sum)
+            c_sum.font = font_parent_bold
             c_sum.alignment = Alignment(horizontal="left", vertical="center")
 
             c_own = ws.cell(row=s_row, column=3, value=st.get("owner", "-"))
@@ -428,9 +439,9 @@ class ExcelReporter:
             c_tot  = ws.cell(row=s_row, column=7, value=f"=SUM(D{s_row}:F{s_row})")
             c_pct  = ws.cell(row=s_row, column=8, value=f'=IF(G{s_row}=0, 0, F{s_row}/G{s_row})')
 
-            c_todo.font = font_data
-            c_prog.font = font_data
-            c_done.font = font_data
+            c_todo.font = font_bold
+            c_prog.font = font_bold
+            c_done.font = font_bold
             c_tot.font = font_bold
             c_pct.font = font_bold
 
@@ -439,27 +450,110 @@ class ExcelReporter:
             c_done.alignment = Alignment(horizontal="right", vertical="center")
             c_tot.alignment  = Alignment(horizontal="right", vertical="center")
             c_pct.alignment  = Alignment(horizontal="right", vertical="center")
-
             c_pct.number_format = "0.0%"
 
             for c in range(1, 9):
                 cell_obj = ws.cell(row=s_row, column=c)
                 cell_obj.border = thin_border
-                if row_fill.fill_type:
-                    cell_obj.fill = row_fill
+                cell_obj.fill = fill_parent_story
 
-            ws.row_dimensions[s_row].height = 20
+            ws.row_dimensions[s_row].height = 22
             s_row += 1
+
+            # 2. NESTED SUBTASKS (Grouped under this Parent Story)
+            matching_subs = [
+                sub for sub in detailed_subtasks
+                if (p_key and sub.get("parent_key") == p_key) or (p_sum and sub.get("parent_summary") == p_sum)
+            ]
+
+            for s_idx, sub in enumerate(matching_subs):
+                sub_key = sub.get("key", "")
+                sub_url = sub.get("url") or f"{base_jira_url}/browse/{sub_key}"
+                sub_summary = sub.get("summary", "")
+                sub_assignee = sub.get("assignee", "Unassigned")
+                sub_role = sub.get("role", "-")
+                raw_status = str(sub.get("status") or sub.get("status_category") or "To Do").strip()
+                st_lower = raw_status.lower()
+
+                # Indented Subtask Key
+                c_sub_key = ws.cell(row=s_row, column=1)
+                c_sub_key.value = f'=HYPERLINK("{sub_url}", "  ↳ {sub_key}")' if sub_key else "  ↳ -"
+                c_sub_key.font = font_subtask_link
+                c_sub_key.alignment = Alignment(horizontal="left", vertical="center")
+
+                # Indented Subtask Title
+                c_sub_sum = ws.cell(row=s_row, column=2, value=f"  ↳ {sub_summary}")
+                c_sub_sum.font = font_subtask_indent
+                c_sub_sum.alignment = Alignment(horizontal="left", vertical="center")
+
+                # Assignee Developer
+                c_sub_ass = ws.cell(row=s_row, column=3, value=sub_assignee)
+                c_sub_ass.font = font_subtask_indent
+                c_sub_ass.alignment = Alignment(horizontal="center", vertical="center")
+
+                # Empty dash for To Do / In Progress / Done counts in subtask row
+                ws.cell(row=s_row, column=4, value="-").alignment = Alignment(horizontal="center", vertical="center")
+                ws.cell(row=s_row, column=5, value="-").alignment = Alignment(horizontal="center", vertical="center")
+
+                # Role column (displayed in Col 6)
+                c_sub_role = ws.cell(row=s_row, column=6, value=f"Role: {sub_role}" if sub_role != "-" else "-")
+                c_sub_role.font = font_subtask_role
+                c_sub_role.alignment = Alignment(horizontal="center", vertical="center")
+
+                # Subtask Story Points / Dash (Col 7)
+                c_sub_sp = ws.cell(row=s_row, column=7, value=sub.get("story_points") or "-")
+                c_sub_sp.font = font_subtask_indent
+                c_sub_sp.alignment = Alignment(horizontal="center", vertical="center")
+
+                # Status Badge (Col 8)
+                c_sub_stat = ws.cell(row=s_row, column=8)
+                c_sub_stat.alignment = Alignment(horizontal="center", vertical="center")
+
+                if any(k in st_lower for k in ("done", "closed", "resolved", "complete", "selesai")):
+                    c_sub_stat.value = "Done"
+                    c_sub_stat.fill = fill_status_done
+                    c_sub_stat.font = font_status_done
+                elif any(k in st_lower for k in ("in progress", "in development", "in review", "progress", "sedang")):
+                    c_sub_stat.value = "In Progress"
+                    c_sub_stat.fill = fill_status_prog
+                    c_sub_stat.font = font_status_prog
+                else:
+                    c_sub_stat.value = "To Do"
+                    c_sub_stat.fill = fill_status_todo
+                    c_sub_stat.font = font_status_todo
+
+                for c in range(1, 9):
+                    cell_obj = ws.cell(row=s_row, column=c)
+                    cell_obj.border = thin_border
+                    if c < 8 and s_idx % 2 == 1:
+                        cell_obj.fill = fill_zebra
+
+                # Set native Excel row grouping outline level
+                ws.row_dimensions[s_row].outlineLevel = 1
+                ws.row_dimensions[s_row].height = 19
+                s_row += 1
 
         # Story Total Row
         tot_story_row = s_row
         ws.cell(row=tot_story_row, column=1, value="Total").font = font_bold
         ws.cell(row=tot_story_row, column=2, value="").font = font_bold
         ws.cell(row=tot_story_row, column=3, value="").font = font_bold
-        ws.cell(row=tot_story_row, column=4, value=f"=SUM(D{sec2_header_row+1}:D{tot_story_row-1})").font = font_bold
-        ws.cell(row=tot_story_row, column=5, value=f"=SUM(E{sec2_header_row+1}:E{tot_story_row-1})").font = font_bold
-        ws.cell(row=tot_story_row, column=6, value=f"=SUM(F{sec2_header_row+1}:F{tot_story_row-1})").font = font_bold
-        ws.cell(row=tot_story_row, column=7, value=f"=SUM(G{sec2_header_row+1}:G{tot_story_row-1})").font = font_bold
+
+        # Sum only Parent rows to prevent double-counting
+        if parent_rows_indices:
+            sum_d_cells = "+".join([f"D{r}" for r in parent_rows_indices])
+            sum_e_cells = "+".join([f"E{r}" for r in parent_rows_indices])
+            sum_f_cells = "+".join([f"F{r}" for r in parent_rows_indices])
+            sum_g_cells = "+".join([f"G{r}" for r in parent_rows_indices])
+            ws.cell(row=tot_story_row, column=4, value=f"={sum_d_cells}").font = font_bold
+            ws.cell(row=tot_story_row, column=5, value=f"={sum_e_cells}").font = font_bold
+            ws.cell(row=tot_story_row, column=6, value=f"={sum_f_cells}").font = font_bold
+            ws.cell(row=tot_story_row, column=7, value=f"={sum_g_cells}").font = font_bold
+        else:
+            ws.cell(row=tot_story_row, column=4, value=0).font = font_bold
+            ws.cell(row=tot_story_row, column=5, value=0).font = font_bold
+            ws.cell(row=tot_story_row, column=6, value=0).font = font_bold
+            ws.cell(row=tot_story_row, column=7, value=0).font = font_bold
 
         c_pct_s_tot = ws.cell(row=tot_story_row, column=8, value=f'=IF(G{tot_story_row}=0, 0, F{tot_story_row}/G{tot_story_row})')
         c_pct_s_tot.font = font_bold
@@ -564,6 +658,91 @@ class ExcelReporter:
 
             ws.row_dimensions[d_row].height = 20
             d_row += 1
+
+        # -------------------------------------------------------------
+        # CHARTS FOR SECTION 2 & SECTION 3
+        # -------------------------------------------------------------
+        # 1. SECTION 2 CHART: Story Completion Horizontal Stacked Bar Chart (Placed at J{sec2_start})
+        if len(stories_data) > 0:
+            s_chart_start_row = 300
+            ws.cell(row=s_chart_start_row, column=1, value="Story")
+            ws.cell(row=s_chart_start_row, column=2, value="To Do")
+            ws.cell(row=s_chart_start_row, column=3, value="In Progress")
+            ws.cell(row=s_chart_start_row, column=4, value="Done")
+
+            # Take top 15 stories for optimal visual presentation
+            chart_stories = stories_data[:15]
+            for s_i, s_item in enumerate(chart_stories, 1):
+                s_curr_row = s_chart_start_row + s_i
+                ws.cell(row=s_curr_row, column=1, value=s_item.get("key") or s_item.get("summary", "")[:20])
+                ws.cell(row=s_curr_row, column=2, value=s_item.get("todo", 0))
+                ws.cell(row=s_curr_row, column=3, value=s_item.get("in_progress", 0))
+                ws.cell(row=s_curr_row, column=4, value=s_item.get("done", 0))
+
+            chart_story = BarChart()
+            chart_story.type = "bar"
+            chart_story.grouping = "stacked"
+            chart_story.overlap = 100
+            chart_story.title = "Progres Penyelesaian per Story Induk"
+            chart_story.x_axis.title = "Jumlah Subtask"
+            chart_story.y_axis.title = "Story Induk"
+            chart_story.legend.legendPos = "r"
+
+            chart_story.dataLabels = DataLabelList()
+            chart_story.dataLabels.showVal = True
+            chart_story.dataLabels.showCatName = False
+            chart_story.dataLabels.showSerName = False
+            chart_story.dataLabels.showPercent = False
+
+            s_data_ref = Reference(ws, min_col=2, max_col=4, min_row=s_chart_start_row, max_row=s_chart_start_row + len(chart_stories))
+            s_cats_ref = Reference(ws, min_col=1, min_row=s_chart_start_row + 1, max_row=s_chart_start_row + len(chart_stories))
+
+            chart_story.add_data(s_data_ref, titles_from_data=True)
+            chart_story.set_categories(s_cats_ref)
+            chart_story.height = 14
+            chart_story.width = 18
+
+            ws.add_chart(chart_story, f"J{sec2_start}")
+
+        # 2. SECTION 3 CHART: Role Breakdown Doughnut Chart (Placed at J{sec3_start})
+        if len(detailed_subtasks) > 0:
+            role_counts = {}
+            for sub in detailed_subtasks:
+                r_name = str(sub.get("role") or "General").strip().title()
+                if not r_name or r_name == "-":
+                    r_name = "General / Other"
+                role_counts[r_name] = role_counts.get(r_name, 0) + 1
+
+            r_chart_start_row = 330
+            ws.cell(row=r_chart_start_row, column=1, value="Role")
+            ws.cell(row=r_chart_start_row, column=2, value="Jumlah")
+
+            r_idx = 1
+            for r_name, r_cnt in sorted(role_counts.items(), key=lambda x: x[1], reverse=True):
+                r_curr_row = r_chart_start_row + r_idx
+                ws.cell(row=r_curr_row, column=1, value=r_name)
+                ws.cell(row=r_curr_row, column=2, value=r_cnt)
+                r_idx += 1
+
+            chart_role = DoughnutChart()
+            chart_role.title = "Distribusi Subtask per Role (BE / FE / QA)"
+            chart_role.legend.legendPos = "r"
+
+            chart_role.dataLabels = DataLabelList()
+            chart_role.dataLabels.showPercent = True
+            chart_role.dataLabels.showVal = False
+            chart_role.dataLabels.showCatName = False
+            chart_role.dataLabels.showSerName = False
+
+            r_data_ref = Reference(ws, min_col=2, min_row=r_chart_start_row, max_row=r_chart_start_row + len(role_counts))
+            r_cats_ref = Reference(ws, min_col=1, min_row=r_chart_start_row + 1, max_row=r_chart_start_row + len(role_counts))
+
+            chart_role.add_data(r_data_ref, titles_from_data=True)
+            chart_role.set_categories(r_cats_ref)
+            chart_role.height = 13
+            chart_role.width = 16
+
+            ws.add_chart(chart_role, f"J{sec3_start}")
 
         # Auto-fit column widths
         for col in ws.columns:

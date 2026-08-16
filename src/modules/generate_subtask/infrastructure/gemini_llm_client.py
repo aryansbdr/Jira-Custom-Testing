@@ -60,17 +60,16 @@ class GeminiLlmClient(ILlmClient):
         prompt = (
             "Role: BRI Scrum Master. Decompose User Story into subtasks strictly using AC terms.\n\n"
             "RULES:\n"
-            "1. Prefix: 'BE -', 'WEB -', or 'Mobile -'\n"
-            "2. Task Titles: Use exact AC wording for BOTH BE and WEB/Mobile subtasks. If AC mentions 'Modul' or 'Komponen', output 'WEB - Create Component <name>'. If AC specifies 'Enhance...', output 'WEB - Enhance...'. If AC specifies 'Nambah/Add/Create...', output 'WEB - Create...'. If explicit 'To do list' or backend endpoints are provided in AC, use those exact items for BE subtasks. NEVER create 'BE -' tasks from document chapter/section/tab names (e.g. do NOT create 'BE - 1 Analisa Operasional Bisnis', 'BE - Bab 5' — section headers belong to WEB/UI forms, NOT backend). If no BE details in AC, output exactly 1 subtask: 'BE - Design Spec API for <story_name>'. NEVER invent URL paths (/v1/...), class names, or migration scripts.\n"
-            "3. ROLE SEPARATION (FE vs BE): NEVER merge Frontend (WEB/Mobile) and Backend (BE) into one subtask. If an AC has both UI display (e.g. 'Menampilkan kolom pada monitoring / page / tabel') and Backend/Database changes (e.g. 'tambah kolom mst_* / endpoint / query'), they MUST ALWAYS be split into separate subtasks: 1 for 'WEB - ...' and 1 for 'BE - ...'.\n"
-            "4. CONSOLIDATION: Group by LOGICAL section/component/modal/page within the SAME role. "
-            "Merge sibling items that share the same action verb and component type into ONE subtask using 'and' or '/'. "
-            "Example: 'Create Sub Menu for Prakarsa Baru' + 'Create Sub Menu for Prakarsa Perubahan Syarat' → 'Create Sub Menu for Prakarsa Baru and Perubahan Syarat'. "
-            "Only split into separate subtasks if items are functionally different (different component type, role, or significantly different complexity). "
-            "NEVER create separate subtasks per field or bullet point.\n"
-            "5. Banned words: Ensure/Handle/Verify/Validate/Make sure/Check that/schema/Review code\n"
-            "6. PRESERVE DOMAIN TERMS: Do NOT translate Indonesian business/domain terms to English. Keep words like 'debitur', 'prakarsa', 'pemrakarsa', 'pemutus', 'pencairan', 'korporasi', 'perubahan syarat', 'pengajuan', 'fasilitas', 'termin', 'rekening' exactly as written in the AC.\n"
-            "7. SP: Fibonacci only (0, 0.5, 1, 2, 3, 5, 8, 13)\n\n"
+            "1. Prefix: 'BE -', 'WEB -', 'MOBILE -', or 'MCS -'\n"
+            "   - 'MOBILE - <Title>': Mobile Frontend Application (Android/iOS screens, layouts, activities, prescreening/pemrakarsa UI).\n"
+            "   - 'MCS - <Title>': Mobile Channel Service (Mobile Backend API / service middleware khusus mobile).\n"
+            "2. Mobile & MCS Tasks: If AC or To-Do explicitly mentions mobile tasks (e.g. Mobile UI, Android, iOS, or Pemrakarsa/Pemutus on Mobile), generate subtasks for role 'mobile' with prefix 'MOBILE - <Title>'. If AC/To-Do mentions mobile API or backend channel service for mobile, generate subtasks with prefix 'MCS - <Title>'.\n"
+            "3. Task Titles: Use exact AC wording for subtasks. If AC mentions 'Modul' or 'Komponen', output 'WEB - Create Component <name>'. If AC specifies 'Enhance...', output 'WEB - Enhance...'. If AC specifies 'Nambah/Add/Create...', output 'WEB - Create...'. If explicit 'To do list' or backend endpoints are provided in AC, use those exact items for BE/MCS subtasks.\n"
+            "4. ROLE SEPARATION: NEVER merge Frontend (WEB/MOBILE) and Backend (BE/MCS) into one subtask.\n"
+            "5. CONSOLIDATION: Group by LOGICAL section/component/modal/page within the SAME role. Merge sibling items that share the same action verb and component type into ONE subtask using 'and' or '/'.\n"
+            "6. Banned words: Ensure/Handle/Verify/Validate/Make sure/Check that/schema/Review code\n"
+            "7. PRESERVE DOMAIN TERMS: Do NOT translate Indonesian business/domain terms to English. Keep words like 'debitur', 'prakarsa', 'pemrakarsa', 'pemutus', 'pencairan', 'korporasi', 'perubahan syarat', 'pengajuan', 'fasilitas', 'termin', 'rekening' exactly as written in the AC.\n"
+            "8. SP: Fibonacci only (0, 0.5, 1, 2, 3, 5, 8, 13)\n\n"
         )
 
         # --- Detect Mobile app context from summary + description ---
