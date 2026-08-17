@@ -130,13 +130,13 @@ class SendSprintReminderUseCase:
             f"Target: <b>{epic_key}</b> | {real_sprint_name}\n"
             f"{time_display}\n\n"
             f"<b>Ringkasan Sprint:</b>\n"
-            f"• Total Subtask : {total_tasks}\n"
-            f"• Selesai (Done): {done_tasks} ({pct_done}%)\n"
-            f"• Pending       : {pending_tasks}\n\n"
+            f"- Total Subtask : {total_tasks}\n"
+            f"- Selesai (Done): {done_tasks} ({pct_done}%)\n"
+            f"- Pending       : {pending_tasks}\n\n"
         )
 
         if pending_tasks > 0:
-            message += "<b>Rincian Tugas Pending per Role & Anggota Tim:</b>\n\n"
+            message += "<b>Rincian Tugas Pending:</b>\n\n"
 
             # 1. Structure tasks: role -> developer -> parent_story -> list of subtasks
             role_order = ["SAD", "Frontend", "Backend", "Mobile", "QA", "General", "Unassigned"]
@@ -172,11 +172,11 @@ class SendSprintReminderUseCase:
 
                     p_key = t.get("parent_key") or "Parent Story"
                     p_sum = t.get("parent_summary") or ""
-                    parent_label = f"[{p_key}] {p_sum}" if p_sum else f"[{p_key}]"
+                    parent_label = f"[{p_key}] {p_sum}" if (p_sum and p_sum != "-") else (f"[{p_key}]" if p_key != "-" else "")
 
                     grouped_by_role[canonical_role][assignee][parent_label].append(t)
 
-            # 2. Render structured blocks per role
+            # 2. Render clean structured blocks per role
             sorted_roles = sorted(
                 grouped_by_role.keys(),
                 key=lambda r: role_order.index(r) if r in role_order else 99
@@ -187,7 +187,7 @@ class SendSprintReminderUseCase:
                 if not devs_dict:
                     continue
 
-                role_header = f"<b>━━━ 🔹 {role_name.upper()} ━━━</b>\n"
+                role_header = f"<b>[{role_name.upper()}]</b>\n"
                 message += role_header
 
                 for assignee, parents_dict in devs_dict.items():
@@ -197,20 +197,21 @@ class SendSprintReminderUseCase:
 
                     tot_dev_tasks = sum(len(ts) for ts in parents_dict.values())
                     if assignee.lower() == "unassigned":
-                        dev_header = f"👤 <b>Belum Diambil (Unassigned)</b> — <i>{tot_dev_tasks} Task</i>\n"
+                        dev_header = f"<b>Belum Diambil (Unassigned)</b> - <i>{tot_dev_tasks} Task</i>\n"
                     else:
-                        dev_header = f"👤 <b>{tag_str}{assignee}</b> — <i>{tot_dev_tasks} Task</i>\n"
+                        dev_header = f"<b>{tag_str}{assignee}</b> - <i>{tot_dev_tasks} Task</i>\n"
                     message += dev_header
 
                     for parent_title, t_list in parents_dict.items():
-                        message += f"  📦 <b>{parent_title}</b>\n"
-                        for t in t_list[:4]:
+                        if parent_title:
+                            message += f"\n  Parent: <b>{parent_title}</b>\n"
+                        for idx, t in enumerate(t_list[:5], 1):
                             t_key = t.get("key", "")
                             t_sum = t.get("summary", "")
                             t_stat = t.get("status", "To Do")
-                            message += f"     • <code>[{t_key}]</code> {t_sum} <i>({t_stat})</i>\n"
-                        if len(t_list) > 4:
-                            message += f"     <i>...dan {len(t_list) - 4} subtask lainnya</i>\n"
+                            message += f"  {idx}. [{t_key}] {t_sum} ({t_stat})\n"
+                        if len(t_list) > 5:
+                            message += f"  <i>...dan {len(t_list) - 5} subtask lainnya</i>\n"
                     message += "\n"
 
             message += "<i>Mohon tim menindaklanjuti tugas pending sebelum akhir sprint.</i>"

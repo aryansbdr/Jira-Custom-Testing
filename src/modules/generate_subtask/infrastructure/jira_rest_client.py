@@ -94,25 +94,17 @@ class JiraRestClient(IJiraClient):
 
         base_url = settings.JIRA_URL.rstrip("/")
         if self._is_cloud():
-            # Jira Cloud: POST /rest/api/3/search (or GET /rest/api/3/search)
-            url = f"{base_url}/rest/api/3/search"
-            headers["Content-Type"] = "application/json"
-            payload = {
+            # Jira Cloud: GET /rest/api/3/search/jql
+            url = f"{base_url}/rest/api/3/search/jql"
+            params = {
                 "jql": jql,
-                "fields": fields if isinstance(fields, list) else [f.strip() for f in fields.split(",") if f.strip()],
+                "fields": ",".join(fields) if isinstance(fields, list) else fields,
                 "maxResults": max_results,
             }
             try:
-                res = requests.post(url, headers=headers, json=payload, auth=auth, timeout=35)
+                res = requests.get(url, headers=headers, params=params, auth=auth, timeout=35)
                 if res.status_code == 200:
                     return res.json().get("issues", [])
-                elif res.status_code == 404:
-                    # Fallback to GET /rest/api/2/search on Cloud if v3 is not available
-                    fallback_url = f"{base_url}/rest/api/2/search"
-                    params = {"jql": jql, "fields": ",".join(fields) if isinstance(fields, list) else fields, "maxResults": max_results}
-                    res_fb = requests.get(fallback_url, headers=headers, params=params, auth=auth, timeout=35)
-                    if res_fb.status_code == 200:
-                        return res_fb.json().get("issues", [])
                 else:
                     print(f"Warning: Jira Cloud search failed ({res.status_code}): {res.text[:200]}")
             except Exception as e:
@@ -654,7 +646,8 @@ class JiraRestClient(IJiraClient):
         project_name = root_key if is_project_level else root_key.split("-")[0]
 
         issues_raw = []
-        resolved_sprint_id = target_info.get("sprint_id")
+        sprint_info = self.get_active_sprint_info(root_key, target_info=target_info)
+        resolved_sprint_id = target_info.get("sprint_id") or (sprint_info.get("sprint_id") if sprint_info else None)
         resolved_board_id = target_info.get("board_id")
 
       
@@ -965,8 +958,48 @@ class JiraRestClient(IJiraClient):
                 "parent_key": parent_key,
                 "parent_summary": parent_summary,
                 "story_points": 1.0,
-                "url": f"{self.jira_url}/browse/{issue_key}",
+                "url": f"{base_jira_url}/browse/{issue_key}",
             })
+
+        # If no subtasks exist under sprint items, treat all sprint stories/tasks as reportable work items
+        if not detailed_subtasks and issues_raw:
+            for item in issues_raw:
+                issue_key = item.get("key", "")
+                fields = item.get("fields", {})
+                issue_summary = fields.get("summary", "")
+                assignee_obj = fields.get("assignee") or {}
+                assignee_name = assignee_obj.get("displayName") or "Unassigned"
+                status_obj = fields.get("status") or {}
+                status_name = status_obj.get("name", "To Do")
+                status_cat_key = (status_obj.get("statusCategory") or {}).get("key", "")
+                normalized_status = _categorize_status(status_name, status_cat_key)
+
+                if assignee_name == "Unassigned":
+                    resolved_role = "-"
+                elif "fridolin" in assignee_name.strip().lower() or "adenito" in assignee_name.strip().lower():
+                    resolved_role = "SAD"
+                else:
+                    task_role = _infer_task_role(issue_summary)
+                    resolved_role = developer_final_roles.get(assignee_name) or task_role
+
+                if normalized_status == "Done":
+                    total_done += 1
+                elif normalized_status == "In Progress":
+                    total_in_progress += 1
+                else:
+                    total_todo += 1
+
+                detailed_subtasks.append({
+                    "key": issue_key,
+                    "summary": issue_summary,
+                    "assignee": assignee_name,
+                    "role": resolved_role,
+                    "status": normalized_status,
+                    "parent_key": "-",
+                    "parent_summary": "-",
+                    "story_points": 1.0,
+                    "url": f"{base_jira_url}/browse/{issue_key}",
+                })
 
         # Ensure all active team members from Members.xlsx appear (only in project mode, not dashboard mode)
         if active_employees and not is_dashboard:
