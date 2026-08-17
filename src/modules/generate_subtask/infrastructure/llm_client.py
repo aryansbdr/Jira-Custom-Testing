@@ -31,7 +31,7 @@ class LlmClient(ILlmClient):
         "   - 'WEB - <Title>': Web Frontend portal / UI / screens.\n"
         "   - 'MOBILE - <Title>': Mobile Frontend Application (Android/iOS screens, layouts, activities, prescreening/pemrakarsa UI).\n"
         "   - 'MCS - <Title>': Mobile Channel Service (Mobile Backend API / service middleware khusus mobile).\n"
-        "   - 'QA - <Title>': Quality Assurance / test execution.\n"
+        "   - EXCLUDE QA: DO NOT generate QA, testing, or UAT subtasks. Testing/QA tasks are handled separately.\n"
         "2. Mobile & MCS Tasks:\n"
         "   - If description/AC/To-Do explicitly mentions mobile tasks (e.g. Mobile UI, Android, iOS, or Pemrakarsa/Pemutus on Mobile), generate subtasks for role 'mobile' with prefix 'MOBILE - <Title>'.\n"
         "   - If description/AC/To-Do mentions mobile API or backend channel service for mobile, generate subtasks with prefix 'MCS - <Title>' (MCS is Mobile Backend).\n"
@@ -40,7 +40,7 @@ class LlmClient(ILlmClient):
         "4. Verbs: Adopt action verbs from RAG DB patterns (Migration/Create/Design Spec/Connecting). Do NOT use informal Indonesian verbs.\n"
         "5. CONSOLIDATION: Merge sibling items that share the same action verb and component type into ONE subtask using 'and' or '/'. Only split if functionally different.\n"
         "6. PRESERVE DOMAIN TERMS: Do NOT translate Indonesian business/domain terms to English. Keep words like 'debitur', 'disposisi', 're-disposisi', 'prakarsa', 'pemrakarsa', 'pemutus', 'pencairan', 'korporasi', 'termin', 'rekening' exactly as written in the AC.\n"
-        "7. Output JSON format: {\"subtasks\":[{\"summary\":\"MOBILE - ... or MCS - ... or BE - ... or WEB - ...\",\"role\":\"backend|frontend|mobile|qa\",\"story_points\":1.0}]}\n\n"
+        "7. Output JSON format: {\"subtasks\":[{\"summary\":\"MOBILE - ... or MCS - ... or BE - ... or WEB - ...\",\"role\":\"backend|frontend|mobile\",\"story_points\":1.0}]}\n\n"
     )
 
     def _get_gemini_api_keys(self) -> List[str]:
@@ -303,9 +303,9 @@ class LlmClient(ILlmClient):
                     prefix = "BE - "
                 else:
                     prefix = "WEB - "
-            elif "qa" in role_val or "tester" in role_val:
-                role_key = "qa"
-                prefix = "QA - "
+            elif "qa" in role_val or "tester" in role_val or any(clean_body_lower.startswith(k) for k in ["qa", "testing", "test execution", "uat", "sit"]):
+                # QA tasks are not generated
+                continue
             else:
                 role_key = "backend"
                 prefix = "BE - "

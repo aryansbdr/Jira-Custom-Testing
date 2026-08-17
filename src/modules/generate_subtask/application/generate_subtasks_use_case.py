@@ -394,6 +394,9 @@ class GenerateSubtasksUseCase:
 
         filtered_subtasks = []
         for sub in generated_subtasks:
+            # Drop QA tasks as requested (QA does not need generated subtasks)
+            if sub.role == "qa" or sub.summary.lower().startswith("qa -") or sub.summary.lower().startswith("testing -"):
+                continue
             # Drop hallucinated Mobile subtasks when the story has no mobile context and no mobile assignee
             if sub.role == "mobile" and not has_mobile_context:
                 continue

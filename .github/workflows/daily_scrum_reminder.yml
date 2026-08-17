@@ -6,6 +6,8 @@ on:
     - cron: '45 1 * * 1-5'
     # 09:30 UTC = 16:30 WIB (Sore Wrap-up Harian, Senin-Jumat)
     - cron: '30 9 * * 1-5'
+    # Test cron trigger untuk jam 15:30 WIB (08:30 UTC)
+    - cron: '30 8 * * *'
   workflow_dispatch: # Tombol manual trigger di web GitHub Actions
 
 jobs:
@@ -13,8 +15,10 @@ jobs:
     name: Send Automated Telegram Reminder
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code Repository
+      - name: Checkout Backend Branch
         uses: actions/checkout@v4
+        with:
+          ref: backend
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5

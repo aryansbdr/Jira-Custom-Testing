@@ -139,7 +139,7 @@ class SendSprintReminderUseCase:
             message += "<b>Rincian Tugas Pending per Role & Anggota Tim:</b>\n\n"
 
             # 1. Structure tasks: role -> developer -> parent_story -> list of subtasks
-            role_order = ["Frontend", "Backend", "Mobile", "QA", "General", "Unassigned"]
+            role_order = ["SAD", "Frontend", "Backend", "Mobile", "QA", "General", "Unassigned"]
             grouped_by_role = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
             for assignee, tasks in member_pending.items():
@@ -155,7 +155,9 @@ class SendSprintReminderUseCase:
                         sub_role = "Unassigned"
 
                     # Normalize role name
-                    if "Front" in sub_role or "Web" in sub_role:
+                    if "Sad" in sub_role or "System" in sub_role or "Design" in sub_role or "Dokumen" in sub_role or "fridolin" in assignee.lower() or "adenito" in assignee.lower():
+                        canonical_role = "SAD"
+                    elif "Front" in sub_role or "Web" in sub_role:
                         canonical_role = "Frontend"
                     elif "Back" in sub_role:
                         canonical_role = "Backend"

@@ -782,23 +782,30 @@ class JiraRestClient(IJiraClient):
         # Helper for subtask role inference
         def _infer_task_role(summary_str: str) -> str:
             s = summary_str.strip().lower()
+            # 1. SAD / System Design / Documentation check first
+            if re.search(r'\b(system design|design system|dokumen utama|product backlog|iad|bmc|sprint plan|service dependency|security review|summary design|risk register|risk management|user manual|user sign-off|architecture|sad|it control checklist|sprint retrospective|dokumen pengembangan|fsd|brd)\b', s):
+                return "SAD"
+            if re.search(r'^(?:\[\s*sad\s*\]|sad\s*[-:]|system design\s*[-:]|dokumen\s*[-:])', s):
+                return "SAD"
+            # 2. Frontend check
             if re.search(r'^(?:\[\s*fe\s*\]|\[\s*frontend\s*\]|\[\s*web\s*\]|fe\s*[-:]|web\s*[-:]|frontend\s*[-:])', s):
                 return "Frontend"
-            if re.search(r'(frontend|react|vue|angular|css|html|layout|modal|navbar|sidebar|screen|figma|ui/ux|view|page|halaman|tampilan)', s):
+            if re.search(r'\b(frontend|react|vue|angular|css|html|layout|modal|navbar|sidebar|screen|figma|ui/ux|view|page|halaman|tampilan)\b', s):
                 return "Frontend"
+            # 3. QA check
             if re.search(r'^(?:\[\s*qa\s*\]|\[\s*qc\s*\]|\[\s*test\s*\]|qa\s*[-:]|qc\s*[-:]|test\s*[-:]|testing\s*[-:])', s):
                 return "QA"
-            if re.search(r'(qa|qc|sit|uat|dast|sast|pentest|testing|test requirement|test plan|test case)', s):
+            if re.search(r'\b(qa|qc|sit|uat|dast|sast|pentest|testing|test requirement|test plan|test case)\b', s):
                 return "QA"
+            # 4. Mobile check
             if re.search(r'^(?:\[\s*mobile\s*\]|\[\s*android\s*\]|\[\s*ios\s*\]|mobile\s*[-:]|android\s*[-:]|ios\s*[-:])', s):
                 return "Mobile"
-            if re.search(r'(mobile|android|ios|apk|flutter|react native)', s):
+            if re.search(r'\b(mobile|android|ios|apk|flutter|react native|mcs)\b', s):
                 return "Mobile"
-            if re.search(r'(system design|dokumen utama|product backlog|iad|bmc|sprint plan|service dependency|security review|risk register|risk management|user manual|user sign-off|architecture|sad)', s):
-                return "SAD"
+            # 5. Backend check
             if re.search(r'^(?:\[\s*be\s*\]|\[\s*backend\s*\]|\[\s*job\s*\]|\[\s*las\s*\]|be\s*[-:]|backend\s*[-:]|api\s*[-:])', s):
                 return "Backend"
-            if re.search(r'(backend|api|endpoint|database|query|service|controller|model|repository|cron|job|kafka|redis|sql|table)', s):
+            if re.search(r'\b(backend|api|endpoint|database|query|service|controller|model|repository|cron|job|kafka|redis|sql|table)\b', s):
                 return "Backend"
             return "Backend"
 
@@ -817,8 +824,11 @@ class JiraRestClient(IJiraClient):
 
         developer_final_roles = {}
         for dev_name, counts in assignee_role_counts.items():
-            if dev_name.strip().lower() in emp_role_map:
-                developer_final_roles[dev_name] = emp_role_map[dev_name.strip().lower()]
+            dev_lower = dev_name.strip().lower()
+            if "fridolin" in dev_lower or "adenito" in dev_lower:
+                developer_final_roles[dev_name] = "SAD"
+            elif dev_lower in emp_role_map:
+                developer_final_roles[dev_name] = emp_role_map[dev_lower]
             else:
                 best_role = max(counts.items(), key=lambda x: x[1])[0]
                 developer_final_roles[dev_name] = best_role
@@ -833,34 +843,40 @@ class JiraRestClient(IJiraClient):
 
         # 2. Process all retrieved issues & subtasks
         for item in issues_raw:
-            st_key = item.get("key", "")
-            f = item.get("fields", {})
-            st_summary = f.get("summary", "")
-            itype_obj = f.get("issuetype") or {}
-            is_subtask = itype_obj.get("subtask", False) or bool(f.get("parent"))
+            issue_key = item.get("key", "")
+            fields = item.get("fields", {})
+            issue_summary = fields.get("summary", "")
+            issue_type_obj = fields.get("issuetype") or {}
+            is_subtask = issue_type_obj.get("subtask", False) or bool(fields.get("parent"))
 
             # Assignee
-            assignee_obj = f.get("assignee") or {}
+            assignee_obj = fields.get("assignee") or {}
             assignee_name = assignee_obj.get("displayName") or "Unassigned"
 
             # Status
-            st_status_obj = f.get("status") or {}
-            st_status_name = st_status_obj.get("name", "To Do")
-            st_status_cat = (st_status_obj.get("statusCategory") or {}).get("key", "")
-            normalized_status = _categorize_status(st_status_name, st_status_cat)
+            status_obj = fields.get("status") or {}
+            status_name = status_obj.get("name", "To Do")
+            status_cat_key = (status_obj.get("statusCategory") or {}).get("key", "")
+            normalized_status = _categorize_status(status_name, status_cat_key)
 
             # Role lookup: Developer overall role -> fallback task inference
             if assignee_name == "Unassigned":
-                role_val = "-"
+                resolved_role = "-"
+            elif "fridolin" in assignee_name.strip().lower() or "adenito" in assignee_name.strip().lower():
+                resolved_role = "SAD"
             else:
-                role_val = developer_final_roles.get(assignee_name) or _infer_task_role(st_summary)
+                task_role = _infer_task_role(issue_summary)
+                if task_role == "SAD":
+                    resolved_role = "SAD"
+                else:
+                    resolved_role = developer_final_roles.get(assignee_name) or task_role
 
             if not is_subtask:
                 # Parent Story / Epic in the sprint
-                if st_key not in story_map:
-                    story_map[st_key] = {
-                        "key": st_key,
-                        "summary": st_summary,
+                if issue_key not in story_map:
+                    story_map[issue_key] = {
+                        "key": issue_key,
+                        "summary": issue_summary,
                         "owner": assignee_name if assignee_name != "Unassigned" else "-",
                         "todo": 0,
                         "in_progress": 0,
@@ -878,19 +894,19 @@ class JiraRestClient(IJiraClient):
                 total_todo += 1
 
             # Parent tracking
-            parent_key = (f.get("parent") or {}).get("key", "")
-            parent_summary = (f.get("parent") or {}).get("fields", {}).get("summary", "")
+            parent_key = (fields.get("parent") or {}).get("key", "")
+            parent_summary = (fields.get("parent") or {}).get("fields", {}).get("summary", "")
             if parent_key and parent_key not in story_map:
                 story_map[parent_key] = {
                     "key": parent_key,
-                    "summary": parent_summary,
+                    "summary": parent_summary or f"Parent {parent_key}",
                     "owner": "-",
                     "todo": 0,
                     "in_progress": 0,
                     "done": 0,
                     "total_subtasks": 0,
                 }
-            if parent_key and parent_key in story_map:
+            if parent_key in story_map:
                 story_map[parent_key]["total_subtasks"] += 1
                 if normalized_status == "Done":
                     story_map[parent_key]["done"] += 1
@@ -899,12 +915,12 @@ class JiraRestClient(IJiraClient):
                 else:
                     story_map[parent_key]["todo"] += 1
 
-            # Member tracking (Only real members, skip 'Unassigned')
+            # Member progress tracking
             if assignee_name != "Unassigned":
                 if assignee_name not in member_map:
                     member_map[assignee_name] = {
                         "name": assignee_name,
-                        "role": role_val,
+                        "role": developer_final_roles.get(assignee_name, resolved_role),
                         "todo": 0,
                         "in_progress": 0,
                         "done": 0,
@@ -918,16 +934,17 @@ class JiraRestClient(IJiraClient):
                 else:
                     member_map[assignee_name]["todo"] += 1
 
-            # Subtask detail row for Excel (without subtask SP)
+            # Detailed subtask entry
             detailed_subtasks.append({
-                "subtask_key": st_key,
-                "summary": st_summary,
+                "key": issue_key,
+                "summary": issue_summary,
                 "assignee": assignee_name,
-                "role": role_val,
+                "role": resolved_role,
                 "status": normalized_status,
-                "raw_status": st_status_name,
                 "parent_key": parent_key,
                 "parent_summary": parent_summary,
+                "story_points": 1.0,
+                "url": f"{self.jira_url}/browse/{issue_key}",
             })
 
         # Ensure all active team members from Members.xlsx appear (only in project mode, not dashboard mode)
