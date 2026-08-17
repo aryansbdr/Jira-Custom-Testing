@@ -332,25 +332,9 @@ def predict_subtasks(req: PredictRequest):
             all_generated = [sub for sub_list in nested_results for sub in sub_list]
 
         else:
-            # 3. Check if issue_key or req.title is an Epic or Single Issue Key in Jira
-            lookup_key = req.issue_key or req.title
-            issues = []
-            try:
-                single = jira_client.get_single_issue(lookup_key)
-                if single and single.issue_type.lower() == "epic":
-                    issues = jira_client.get_epic_issues(single.key)
-                elif single:
-                    issues = [single]
-                else:
-                    issues = jira_client.get_epic_issues(lookup_key)
-            except Exception as err:
-                print(f"Warning: Jira issue lookup skipped for '{lookup_key}': {err}")
-                issues = []
-
-            if not issues:
-                # Fallback to direct text AC input
-                jira_existing = list(jira_client.get_existing_subtask_summaries(req.issue_key)) if req.issue_key else []
-                combined_existing = list(set(jira_existing + (req.existing_subtask_summaries or [])))
+            # 3. If direct AC text and title are provided in payload (from Forge UI), process directly without redundant Jira API roundtrips
+            if req.title and req.ac_text and not req.is_epic:
+                combined_existing = req.existing_subtask_summaries or []
                 req_assignee = getattr(req, "assignee", "") or ""
                 req_assignee_role = emp_role_map.get(req_assignee.strip().lower(), "")
                 subtask_objs = generate_subtasks_uc.execute(
@@ -368,31 +352,65 @@ def predict_subtasks(req: PredictRequest):
                     sub.parent_type = req.parent_type
                 all_generated = subtask_objs
             else:
-                # Process all child stories using controlled parallel workers (2 workers max).
-                def process_story(story_item):
-                    desc = story_item.description or req.ac_text or story_item.summary
-                    jira_existing = list(jira_client.get_existing_subtask_summaries(story_item.key))
-                    extra_from_req = req.existing_subtask_summaries or []
-                    combined_existing = list(set(jira_existing + extra_from_req))
-                    st_assignee = getattr(story_item, "assignee", "") or getattr(story_item, "owner", "") or ""
-                    st_assignee_role = emp_role_map.get(st_assignee.strip().lower(), "")
-                    subs = generate_subtasks_uc.execute(
-                        summary=story_item.summary,
-                        description=desc,
-                        parent_sp=story_item.story_points,
-                        existing_subtasks=combined_existing,
-                        issue_key=story_item.key,
-                        assignee=st_assignee,
-                        assignee_role=st_assignee_role,
-                    )
-                    for sub in subs:
-                        sub.parent_key = story_item.key
-                        sub.parent_summary = story_item.summary
-                        sub.parent_type = story_item.issue_type
-                    return subs
+                # Fallback to Jira lookup if text was omitted
+                lookup_key = req.issue_key or req.title
+                issues = []
+                try:
+                    single = jira_client.get_single_issue(lookup_key)
+                    if single and single.issue_type.lower() == "epic":
+                        issues = jira_client.get_epic_issues(single.key)
+                    elif single:
+                        issues = [single]
+                    else:
+                        issues = jira_client.get_epic_issues(lookup_key)
+                except Exception as err:
+                    print(f"Warning: Jira issue lookup skipped for '{lookup_key}': {err}")
+                    issues = []
 
-                nested_results = list(executor.map(process_story, issues))
-                all_generated = [sub for sub_list in nested_results for sub in sub_list]
+                if not issues:
+                    combined_existing = req.existing_subtask_summaries or []
+                    req_assignee = getattr(req, "assignee", "") or ""
+                    req_assignee_role = emp_role_map.get(req_assignee.strip().lower(), "")
+                    subtask_objs = generate_subtasks_uc.execute(
+                        summary=req.title,
+                        description=req.ac_text,
+                        parent_sp=req.parent_sp,
+                        existing_subtasks=combined_existing,
+                        issue_key=req.issue_key,
+                        assignee=req_assignee,
+                        assignee_role=req_assignee_role,
+                    )
+                    for sub in subtask_objs:
+                        sub.parent_key = req.issue_key
+                        sub.parent_summary = req.title
+                        sub.parent_type = req.parent_type
+                    all_generated = subtask_objs
+                else:
+                    # Process all child stories using controlled parallel workers (2 workers max).
+                    def process_story(story_item):
+                        desc = story_item.description or req.ac_text or story_item.summary
+                        jira_existing = list(jira_client.get_existing_subtask_summaries(story_item.key))
+                        extra_from_req = req.existing_subtask_summaries or []
+                        combined_existing = list(set(jira_existing + extra_from_req))
+                        st_assignee = getattr(story_item, "assignee", "") or getattr(story_item, "owner", "") or ""
+                        st_assignee_role = emp_role_map.get(st_assignee.strip().lower(), "")
+                        subs = generate_subtasks_uc.execute(
+                            summary=story_item.summary,
+                            description=desc,
+                            parent_sp=story_item.story_points,
+                            existing_subtasks=combined_existing,
+                            issue_key=story_item.key,
+                            assignee=st_assignee,
+                            assignee_role=st_assignee_role,
+                        )
+                        for sub in subs:
+                            sub.parent_key = story_item.key
+                            sub.parent_summary = story_item.summary
+                            sub.parent_type = story_item.issue_type
+                        return subs
+
+                    nested_results = list(executor.map(process_story, issues))
+                    all_generated = [sub for sub_list in nested_results for sub in sub_list]
 
         # 4. Filter by role if requested
         if req.selected_role and req.selected_role.lower() != "all":
