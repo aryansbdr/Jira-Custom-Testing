@@ -757,14 +757,27 @@ class JiraRestClient(IJiraClient):
                 else:
                     jql = 'sprint in openSprints() AND issuetype in subTaskIssueTypes() ORDER BY assignee ASC, status ASC'
             elif is_project_level:
-                jql = f'project = "{root_key}" AND issuetype in subTaskIssueTypes() ORDER BY parent ASC'
-                root_summary = f"Seluruh Subtask & Epic Sprint Project {root_key}"
+                fields_list = ["summary", "status", "assignee", "parent", "issuetype", settings.JIRA_STORY_POINTS_FIELD]
+                # 1. Prioritize active sprint in this project
+                jql = f'project = "{root_key}" AND sprint in openSprints() ORDER BY parent ASC, created DESC'
+                issues_raw = self._execute_jql_search(jql, fields_list, max_results=250)
+
+                # 2. If no open sprint issues found, query all subtasks
+                if not issues_raw:
+                    jql = f'project = "{root_key}" AND issuetype in subTaskIssueTypes() ORDER BY parent ASC'
+                    issues_raw = self._execute_jql_search(jql, fields_list, max_results=250)
+
+                # 3. Fallback to all project issues
+                if not issues_raw:
+                    jql = f'project = "{root_key}" ORDER BY created DESC'
+                    issues_raw = self._execute_jql_search(jql, fields_list, max_results=250)
+
+                root_summary = f"Seluruh Subtask & Sprint Project {root_key}"
             else:
                 jql = f'parent = "{root_key}" OR "Epic Link" = "{root_key}" OR id = "{root_key}" ORDER BY parent ASC'
                 root_summary = root_key
-
-            fields_list = ["summary", "status", "assignee", "parent", "issuetype", settings.JIRA_STORY_POINTS_FIELD]
-            issues_raw = self._execute_jql_search(jql, fields_list, max_results=250)
+                fields_list = ["summary", "status", "assignee", "parent", "issuetype", settings.JIRA_STORY_POINTS_FIELD]
+                issues_raw = self._execute_jql_search(jql, fields_list, max_results=250)
 
         # Fallback if single issue passed and JQL didn't catch subtasks directly
         if not issues_raw and not is_project_level:
