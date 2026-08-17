@@ -14,8 +14,12 @@ class JiraRestClient(IJiraClient):
     and Jira Cloud (Basic Auth) dynamically.
     """
 
+    def _get_base_url(self) -> str:
+        url = str(settings.JIRA_URL or "").strip().strip('\r\n\t "\'').rstrip('/')
+        return url
+
     def _is_cloud(self) -> bool:
-        return "atlassian.net" in settings.JIRA_URL.lower()
+        return "atlassian.net" in self._get_base_url().lower()
 
     def _get_headers(
         self, custom_headers: Optional[Dict[str, str]] = None
@@ -25,26 +29,21 @@ class JiraRestClient(IJiraClient):
             headers.update(custom_headers)
 
         # Determine authentication method based on Jira type
-        if self._is_cloud():
-            # Cloud expects Basic authentication (Base64 of email:token handled by requests.auth)
-            # We will use the requests 'auth' parameter for Cloud.
-            pass
-        else:
-            # Jira Server/Data Center (e.g. jira.bri.co.id) expects Bearer token PAT auth
-            headers["Authorization"] = f"Bearer {settings.JIRA_API_TOKEN}"
+        if not self._is_cloud():
+            token = str(settings.JIRA_API_TOKEN or "").strip().strip('\r\n\t "\'')
+            headers["Authorization"] = f"Bearer {token}"
 
         return headers
 
     def _get_auth(self) -> Optional[requests.auth.HTTPBasicAuth]:
         if self._is_cloud():
-            if not settings.JIRA_EMAIL or not settings.JIRA_API_TOKEN:
+            email = str(settings.JIRA_EMAIL or "").strip().strip('\r\n\t "\'')
+            token = str(settings.JIRA_API_TOKEN or "").strip().strip('\r\n\t "\'')
+            if not email or not token:
                 raise ValueError(
                     "For Jira Cloud, JIRA_EMAIL and JIRA_API_TOKEN must be configured."
                 )
-            return requests.auth.HTTPBasicAuth(
-                settings.JIRA_EMAIL, settings.JIRA_API_TOKEN
-            )
-        # Server PAT does not use Basic Auth parameters
+            return requests.auth.HTTPBasicAuth(email, token)
         return None
 
     def _clean_key(self, raw_key: str) -> str:
@@ -92,7 +91,7 @@ class JiraRestClient(IJiraClient):
             print(f"Warning: Jira authentication skipped: {auth_err}")
             return []
 
-        base_url = settings.JIRA_URL.rstrip("/")
+        base_url = self._get_base_url()
         if self._is_cloud():
             # Jira Cloud: GET /rest/api/3/search/jql
             url = f"{base_url}/rest/api/3/search/jql"
@@ -613,7 +612,7 @@ class JiraRestClient(IJiraClient):
         headers = self._get_headers()
         auth = self._get_auth()
         api_ver = "3" if self._is_cloud() else "2"
-        base_jira_url = settings.JIRA_URL.rstrip("/")
+        base_jira_url = self._get_base_url()
 
         # Build employee role lookup dictionary (by lower name and PN)
         emp_role_map = {}
@@ -1066,7 +1065,7 @@ class JiraRestClient(IJiraClient):
 
         auth = self._get_auth()
         headers = self._get_headers()
-        base_jira_url = settings.JIRA_URL.rstrip("/")
+        base_jira_url = self._get_base_url()
 
         candidate_board_ids = []
         if target_info.get("board_id"):
