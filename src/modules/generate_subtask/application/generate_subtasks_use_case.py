@@ -263,28 +263,36 @@ class GenerateSubtasksUseCase:
                 # Clean all leading role prefixes (BE -, WEB -, FE -, WEBAPP -, Mobile -, etc.) completely
                 clean_body = re.sub(r'^((be|web|fe|webapp|mobile)\s*-\s*)+', '', summary_text, flags=re.IGNORECASE).strip()
 
-                # Normalize role: 'developer' -> 'backend', 'fe'/'web' -> 'frontend'
+                # Classify role based on User Specification:
+                # 1. [Mobile Pemrakarsa] / [Mobile Pemutus] -> Frontend
+                # 2. [MCS Pemrakarsa] / [MCS Pemutus] / MCS - -> Backend
+                # 3. General Web UI -> Frontend, General API -> Backend
+                clean_body_lower = clean_body.lower()
+                is_pemutus = "pemutus" in summary_lower or "pemutus" in (description or "").lower()
+                role_tag = "[Mobile Pemutus]" if is_pemutus else "[Mobile Pemrakarsa]"
+                mcs_tag = "[MCS Pemutus]" if is_pemutus else "[MCS Pemrakarsa]"
+
                 raw_role = str(sub.get("role", "backend")).lower()
-                if raw_role in ("developer", "backend", "be"):
-                    normalized_role = "backend"
-                elif raw_role in ("frontend", "web", "fe"):
+                if clean_body_lower.startswith("[mobile") or clean_body_lower.startswith("mobile -"):
                     normalized_role = "frontend"
-                elif raw_role == "mobile":
-                    normalized_role = "mobile"
+                elif clean_body_lower.startswith("[mcs") or clean_body_lower.startswith("mcs -"):
+                    normalized_role = "backend"
+                elif raw_role in ("developer", "backend", "be"):
+                    normalized_role = "backend"
+                elif raw_role in ("frontend", "web", "fe", "mobile"):
+                    normalized_role = "frontend"
                 else:
-                    # Infer from prefix if role is unrecognized
                     normalized_role = "frontend" if summary_text.upper().startswith("WEB -") else "backend"
 
-                # --- UI Override: detect tasks with UI keywords (pop up, wording, halaman, redirect, etc.) that were mislabeled as backend in the DB ---
+                # --- UI Override: detect tasks with UI keywords that were mislabeled as backend in the DB ---
                 _ui_kw = [
                     "pop up", "popup", "wording", "halaman", "redirect",
                     "button", "tombol", "screen", "layout", "tampilan",
                     "dropdown", "autofill", "checkbox", "radio", "figma",
                 ]
-                is_ui_task = any(kw in clean_body.lower() for kw in _ui_kw)
-                if is_ui_task and normalized_role == "backend":
-                    # If the story is mobile, classify as mobile, otherwise frontend
-                    normalized_role = "mobile" if "mob" in summary_lower or "prakarsa" in summary_lower or "prescreening" in summary_lower else "frontend"
+                is_ui_task = any(kw in clean_body_lower for kw in _ui_kw)
+                if is_ui_task:
+                    normalized_role = "frontend"
 
                 # --- Backend override: correct stale/wrong roles saved in the DB ---
                 _backend_kw = [
@@ -294,21 +302,24 @@ class GenerateSubtasksUseCase:
                     "stored procedure", "cekdata", "function general",
                     "insert into", "select from", "endpoint", "query",
                 ]
-                if normalized_role in ("frontend", "mobile") and not is_ui_task:
-                    if any(kw in clean_body.lower() for kw in _backend_kw):
+                if normalized_role == "frontend" and not is_ui_task:
+                    if any(kw in clean_body_lower for kw in _backend_kw):
                         normalized_role = "backend"
 
-                # Build final prefix from the resolved role (do not prepend prefix if already tagged with brackets [Role])
+                # Build final summary text:
                 if clean_body.startswith("["):
                     summary_text = clean_body
                 else:
                     if normalized_role == "frontend":
-                        role_prefix = "WEB - "
-                    elif normalized_role == "mobile":
-                        role_prefix = "MOBILE - "
+                        if "prakarsa" in summary_lower or "prescreening" in summary_lower or "mikro" in summary_lower:
+                            summary_text = f"{role_tag} {clean_body}"
+                        else:
+                            summary_text = f"WEB - {clean_body}"
                     else:
-                        role_prefix = "BE - "
-                    summary_text = f"{role_prefix}{clean_body}"
+                        if "prakarsa" in summary_lower or "prescreening" in summary_lower or "mikro" in summary_lower:
+                            summary_text = f"{mcs_tag} {clean_body}"
+                        else:
+                            summary_text = f"BE - {clean_body}"
 
                 cloned_subtasks.append(
                     Subtask(
