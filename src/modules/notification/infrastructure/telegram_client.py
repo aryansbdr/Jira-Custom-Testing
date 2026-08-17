@@ -15,8 +15,11 @@ class TelegramBotClient(INotificationClient):
         parse_mode: str = "HTML",
         chat_id: Optional[str] = None,
     ) -> bool:
-        bot_token = settings.TELEGRAM_BOT_TOKEN
-        target_chat_id = chat_id or settings.TELEGRAM_CHAT_ID
+        bot_token = str(settings.TELEGRAM_BOT_TOKEN or "").strip().strip('"').strip("'")
+        if bot_token.lower().startswith("bot"):
+            bot_token = bot_token[3:]
+
+        target_chat_id = str(chat_id or settings.TELEGRAM_CHAT_ID or "").strip().strip('"').strip("'")
 
         if not bot_token:
             raise ValueError(
