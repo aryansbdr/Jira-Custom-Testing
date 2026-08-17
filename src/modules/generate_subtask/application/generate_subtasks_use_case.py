@@ -81,7 +81,7 @@ class GenerateSubtasksUseCase:
             if has_web and ("menampilkan" in item_lower or "monitoring" in item_lower) and not any(db_kw in item_lower for db_kw in ["mst_", "endpoint", "api", "query"]):
                 has_be = False
 
-            has_mobile = any(kw in item_lower for kw in ["mobile", "brispot", "layout", "activity", "android", "ios", "prescreening"])
+            has_mobile = any(kw in item_lower for kw in ["mobile", "brispot", "layout", "activity", "android", "ios", "prescreening", "prakarsa", "mikro", "kur", "slik"])
 
             role_hint = "backend" if has_be and not has_web else "frontend" if has_web and not has_be else "mobile" if has_mobile else "general"
 
@@ -275,29 +275,40 @@ class GenerateSubtasksUseCase:
                     # Infer from prefix if role is unrecognized
                     normalized_role = "frontend" if summary_text.upper().startswith("WEB -") else "backend"
 
+                # --- UI Override: detect tasks with UI keywords (pop up, wording, halaman, redirect, etc.) that were mislabeled as backend in the DB ---
+                _ui_kw = [
+                    "pop up", "popup", "wording", "halaman", "redirect",
+                    "button", "tombol", "screen", "layout", "tampilan",
+                    "dropdown", "autofill", "checkbox", "radio", "figma",
+                ]
+                is_ui_task = any(kw in clean_body.lower() for kw in _ui_kw)
+                if is_ui_task and normalized_role == "backend":
+                    # If the story is mobile, classify as mobile, otherwise frontend
+                    normalized_role = "mobile" if "mob" in summary_lower or "prakarsa" in summary_lower or "prescreening" in summary_lower else "frontend"
+
                 # --- Backend override: correct stale/wrong roles saved in the DB ---
-                # The DB may contain subtasks where "Create New Endpoint", "Enhance Endpoint",
-                # or API-related tasks were stored with role=frontend. We detect these via keywords
-                # and force them back to backend so they land with the right developer.
                 _backend_kw = [
                     "migration", "database migration",
                     "db schema", "tabel database", "kolom database",
                     "repository", "controller",
                     "stored procedure", "cekdata", "function general",
-                    "insert into", "select from",
+                    "insert into", "select from", "endpoint", "query",
                 ]
-                if normalized_role in ("frontend", "mobile"):
+                if normalized_role in ("frontend", "mobile") and not is_ui_task:
                     if any(kw in clean_body.lower() for kw in _backend_kw):
                         normalized_role = "backend"
 
-                # Build final prefix from the resolved (possibly overridden) role
-                if normalized_role == "frontend":
-                    role_prefix = "WEB - "
-                elif normalized_role == "mobile":
-                    role_prefix = "Mobile - "
+                # Build final prefix from the resolved role (do not prepend prefix if already tagged with brackets [Role])
+                if clean_body.startswith("["):
+                    summary_text = clean_body
                 else:
-                    role_prefix = "BE - "
-                summary_text = f"{role_prefix}{clean_body}"
+                    if normalized_role == "frontend":
+                        role_prefix = "WEB - "
+                    elif normalized_role == "mobile":
+                        role_prefix = "MOBILE - "
+                    else:
+                        role_prefix = "BE - "
+                    summary_text = f"{role_prefix}{clean_body}"
 
                 cloned_subtasks.append(
                     Subtask(
@@ -331,8 +342,8 @@ class GenerateSubtasksUseCase:
 
                 # Mobile subtasks are valid when the story mentions BRISpot mobile roles
                 _mobile_kw = [
-                    "pemrakarsa", "pemutus",
-                    "mobile", "mobile app", "brispot", "android", "ios", "aplikasi",
+                    "pemrakarsa", "prakarsa", "pemutus", "prescreening",
+                    "mikro", "kur", "slik", "mobile", "mobile app", "brispot", "android", "ios", "aplikasi",
                 ]
                 has_mobile_ctx = any(
                     kw in (summary + " " + (description or "")).lower() for kw in _mobile_kw

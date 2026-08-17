@@ -111,7 +111,13 @@ class LlmClient(ILlmClient):
     _MOBILE_CONTEXT_KEYWORDS = [
         # Domain-specific triggers (BRISpot mobile workflow roles)
         "pemrakarsa",
+        "prakarsa",
         "pemutus",
+        "prescreening",
+        "mikro",
+        "kur",
+        "slik",
+        "ots",
         "mobile",
         "mobile app",
         "android",
