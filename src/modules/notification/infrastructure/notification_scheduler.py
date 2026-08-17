@@ -87,8 +87,8 @@ class NotificationSchedulerService:
             employees = self._get_employees()
             result = self.use_case.execute(
                 epic_key=project_key,
-                sprint_name="Active Sprint",
-                days_remaining=2,
+                sprint_name=None,
+                days_remaining=None,
                 employees=employees,
             )
             self._save_history("last_morning_date", today_str)
@@ -105,8 +105,8 @@ class NotificationSchedulerService:
             employees = self._get_employees()
             result = self.use_case.execute(
                 epic_key=project_key,
-                sprint_name="Active Sprint",
-                days_remaining=2,
+                sprint_name=None,
+                days_remaining=None,
                 employees=employees,
             )
             self._save_history("last_afternoon_date", today_str)
