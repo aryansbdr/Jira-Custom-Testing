@@ -94,8 +94,9 @@ class JiraRestClient(IJiraClient):
 
         base_url = settings.JIRA_URL.rstrip("/")
         if self._is_cloud():
-            # Jira Cloud: POST /rest/api/3/search/jql
-            url = f"{base_url}/rest/api/3/search/jql"
+            # Jira Cloud: POST /rest/api/3/search (or GET /rest/api/3/search)
+            url = f"{base_url}/rest/api/3/search"
+            headers["Content-Type"] = "application/json"
             payload = {
                 "jql": jql,
                 "fields": fields if isinstance(fields, list) else [f.strip() for f in fields.split(",") if f.strip()],
@@ -105,6 +106,13 @@ class JiraRestClient(IJiraClient):
                 res = requests.post(url, headers=headers, json=payload, auth=auth, timeout=35)
                 if res.status_code == 200:
                     return res.json().get("issues", [])
+                elif res.status_code == 404:
+                    # Fallback to GET /rest/api/2/search on Cloud if v3 is not available
+                    fallback_url = f"{base_url}/rest/api/2/search"
+                    params = {"jql": jql, "fields": ",".join(fields) if isinstance(fields, list) else fields, "maxResults": max_results}
+                    res_fb = requests.get(fallback_url, headers=headers, params=params, auth=auth, timeout=35)
+                    if res_fb.status_code == 200:
+                        return res_fb.json().get("issues", [])
                 else:
                     print(f"Warning: Jira Cloud search failed ({res.status_code}): {res.text[:200]}")
             except Exception as e:
@@ -730,7 +738,7 @@ class JiraRestClient(IJiraClient):
                         filter_jql = f_data.get("jql")
                         if filter_jql:
                             fields_to_fetch = f"summary,status,assignee,parent,issuetype,{settings.JIRA_STORY_POINTS_FIELD}"
-                            search_url = f"{base_jira_url}/rest/api/{api_ver}/search/jql" if self._is_cloud() else f"{base_jira_url}/rest/api/2/search"
+                            search_url = f"{base_jira_url}/rest/api/{api_ver}/search" if self._is_cloud() else f"{base_jira_url}/rest/api/2/search"
                             res = requests.get(
                                 search_url,
                                 headers=headers,
