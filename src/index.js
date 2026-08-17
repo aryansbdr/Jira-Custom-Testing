@@ -91,14 +91,34 @@ function normalizeCategory(role) {
     return 'QA';
   }
 
+  if (
+    value === 'sad' ||
+    value === 'system design' ||
+    value === 'design system' ||
+    value === 'system analyst' ||
+    value === 'system analyst designer' ||
+    value === 'sa'
+  ) {
+    return 'SAD';
+  }
+
   return 'Backend';
 }
 
-function extractSquadName(summary = '') {
+function extractSquadName(summary = '', assigneeName = '') {
   const text = String(summary || '').trim();
+  const ass = String(assigneeName || '').toLowerCase();
+  if (ass.includes('fridolin') || ass.includes('adenito')) {
+    return 'SAD';
+  }
   const match = text.match(/^\[(.*?)\]/);
   if (match && match[1]) {
     return normalizeCategory(match[1].trim());
+  }
+  if (
+    /\b(system design|design system|dokumen utama|product backlog|iad|bmc|sprint plan|service dependency|security review|risk register|risk management|user manual|user sign-off|architecture|sad|it control checklist|sprint retrospective|summary design|dokumen pengembangan)\b/i.test(text)
+  ) {
+    return 'SAD';
   }
   if (/^mobile/i.test(text) || /\bmobile\b/i.test(text) || /^mob\b/i.test(text)) {
     return 'Mobile';
@@ -1121,7 +1141,7 @@ resolver.define('getEpicStoryDetails', async (req) => {
 
       const summary = st.fields?.summary || '';
       const assigneeName = st.fields?.assignee?.displayName;
-      const role = extractSquadName(summary);
+      const role = extractSquadName(summary, assigneeName);
 
       subtasksByStoryKey[parentKey].push({
         key: st.key,
@@ -1176,7 +1196,7 @@ resolver.define('getEpicStoryDetails', async (req) => {
 resolver.define('exportExcelReport', async (req) => {
   const payload = req.payload || {};
   const FASTAPI_REPORT_URL =
-    'https://schedule-smallest-startup-upper.trycloudflare.com/api/v1/reporting/export-excel';
+    'https://arrivals-customize-thompson-cosmetics.trycloudflare.com/api/v1/reporting/export-excel';
 
   try {
     console.log('[Export Excel] Calling Python Excel Reporter:', FASTAPI_REPORT_URL);
@@ -1368,7 +1388,7 @@ resolver.define(
       // ========================================================
 
       const FASTAPI_URL =
-        "https://four-algorithm-permits-lover.trycloudflare.com/api/v1/predict";
+        "https://arrivals-customize-thompson-cosmetics.trycloudflare.com/api/v1/predict";
 
       console.log('========================================');
       console.log('[DEBUG JIRA → FASTAPI]');

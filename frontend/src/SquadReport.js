@@ -269,12 +269,12 @@ export function SquadReport() {
     let start = epicDetails?.startDate ? new Date(epicDetails.startDate) : null;
     let end = epicDetails?.endDate ? new Date(epicDetails.endDate) : (epicDetails?.duedate ? new Date(epicDetails.duedate) : null);
 
-    // If no explicit dates set in Jira, fallback to a sensible 14-day sprint from the beginning of current cycle
+    // If no explicit dates set in Jira, fallback to a sensible 1-month sprint cycle (start of month to end of month)
     if (!start || isNaN(start.getTime())) {
       start = new Date(today.getFullYear(), today.getMonth(), 1);
     }
     if (!end || isNaN(end.getTime())) {
-      end = new Date(start.getTime() + 14 * 24 * 60 * 60 * 1000);
+      end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
     }
 
     const totalDays = Math.max(1, Math.ceil((end - start) / (1000 * 60 * 60 * 24)));
