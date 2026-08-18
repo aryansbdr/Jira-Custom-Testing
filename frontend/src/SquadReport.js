@@ -3,11 +3,36 @@ import { invoke, view } from '@forge/bridge';
 import {
   PieChart,
   Pie,
-  Tooltip,
-  Legend,
   ResponsiveContainer,
   Cell
 } from 'recharts';
+
+const RADIAN = Math.PI / 180;
+
+// Render label persentase di dalam slice pie chart.
+// Slice dengan value 0 tidak diberi label supaya tidak menumpuk di titik yang sama.
+function renderPercentLabel({ cx, cy, midAngle, innerRadius, outerRadius, percent, value }) {
+  if (!value || percent === 0) return null;
+
+  const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
+  const x = cx + radius * Math.cos(-midAngle * RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * RADIAN);
+
+  return (
+    <text
+      x={x}
+      y={y}
+      fill="#FFFFFF"
+      textAnchor="middle"
+      dominantBaseline="central"
+      fontSize={11}
+      fontWeight={700}
+      style={{ pointerEvents: 'none' }}
+    >
+      {`${Math.round(percent * 100)}%`}
+    </text>
+  );
+}
 
 function downloadBase64File(base64Data, fileName, mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
   const byteCharacters = atob(base64Data);
@@ -263,6 +288,26 @@ export function SquadReport() {
 
   const currentEpicObj = epics.find((e) => e.key === selectedEpicKey);
 
+  // Menentukan kode & judul yang ditampilkan di gadget:
+  // - Jika user memilih salah satu Story, tampilkan kode & summary Story tersebut
+  // - Jika "ALL" (belum memilih story spesifik), tampilkan kode & summary Epic
+  const currentSelectionInfo = useMemo(() => {
+    if (selectedStoryKey !== 'ALL') {
+      const selectedStory = stories.find((s) => s.key === selectedStoryKey);
+      if (selectedStory) {
+        return {
+          key: selectedStory.key,
+          title: selectedStory.summary || selectedStory.key
+        };
+      }
+    }
+    return {
+      key: selectedEpicKey,
+      title: currentEpicObj ? currentEpicObj.summary : selectedEpicKey
+    };
+  }, [selectedStoryKey, stories, selectedEpicKey, currentEpicObj]);
+
+
   // Dynamic Sprint & Date Calculations
   const sprintInfo = useMemo(() => {
     const today = new Date();
@@ -428,7 +473,7 @@ export function SquadReport() {
         style={{
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center',
+          alignItems: 'flex-start',
           flexWrap: 'wrap',
           gap: '16px',
           backgroundColor: 'var(--ds-surface-overlay, #22272B)',
@@ -439,7 +484,7 @@ export function SquadReport() {
           marginBottom: '20px'
         }}
       >
-        <div>
+        <div style={{ flex: '1 1 280px', minWidth: 0 }}>
           <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold', color: 'var(--ds-text, #DCDFE4)' }}>
             {currentEpicObj ? `[${currentEpicObj.key}] ${currentEpicObj.summary}` : 'Sprint & Squad Health Overview'}
           </h2>
@@ -448,7 +493,7 @@ export function SquadReport() {
           </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', flex: '0 0 auto' }}>
           {/* Epic Selector */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <label htmlFor="epic-top-select" style={{ fontSize: '12px', fontWeight: 600, color: 'var(--ds-text-subtle, #8C9BAB)' }}>
@@ -576,13 +621,12 @@ export function SquadReport() {
           </div>
 
           <div style={{ padding: '18px 20px' }}>
-            <div style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--ds-text-brand, #579DFF)' }}>{currentProjectKey} - {selectedEpicKey}</div>
+            <div style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--ds-text-brand, #579DFF)' }}>{currentProjectKey} - {currentSelectionInfo.key}</div>
             <div style={{ fontSize: '12px', color: 'var(--ds-text-subtle, #8C9BAB)', marginBottom: '16px' }}>{sprintInfo.sprintName}</div>
 
             <div
               style={{
                 backgroundColor: 'var(--ds-background-neutral-subtle, #161A1D)',
-                border: '1px solid var(--ds-border, #2C333A)',
                 borderRadius: '8px',
                 padding: '24px 20px',
                 textAlign: 'center',
@@ -626,7 +670,7 @@ export function SquadReport() {
 
           <div style={{ padding: '16px 20px' }}>
             <div style={{ fontSize: '14px', fontWeight: 'bold', color: 'var(--ds-text, #DCDFE4)', marginBottom: '14px' }}>
-              Sprint Health - {selectedEpicKey || currentProjectKey}
+              Sprint Health - {currentSelectionInfo.key || currentProjectKey}
             </div>
 
             {/* Overall Sprint Progress Bar */}
@@ -780,23 +824,15 @@ export function SquadReport() {
                         nameKey="name"
                         cx="50%"
                         cy="50%"
-                        innerRadius={34}
                         outerRadius={58}
                         paddingAngle={2}
+                        label={renderPercentLabel}
+                        labelLine={false}
                       >
                         {person.data.map((entry, index) => (
                           <Cell key={`${person.name}-${index}`} fill={entry.color} />
                         ))}
                       </Pie>
-                      <Tooltip
-                        formatter={(value) => [`${value} Subtasks`, 'Jumlah']}
-                        contentStyle={{
-                          backgroundColor: '#22272B',
-                          border: '1px solid #333C48',
-                          borderRadius: '4px',
-                          color: '#DCDFE4',
-                        }}
-                     />
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
@@ -813,11 +849,7 @@ export function SquadReport() {
                     <div
                       key={`${person.name}-${entry.name}-stat`}
                       style={{
-                        border: '1px solid #333C48',
-                        borderRadius: '6px',
-                        padding: '6px 4px',
                         textAlign: 'center',
-                        backgroundColor: 'rgba(255,255,255,0.02)',
                       }}
                     >
                       <div
