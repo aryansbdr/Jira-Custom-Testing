@@ -62,22 +62,22 @@ function normalizeCategory(role) {
     value === 'fe' ||
     value === 'web'
   ) {
-    return 'Frontend';
+    return 'Web';
   }
 
   if (
     value === 'backend' ||
     value === 'back-end' ||
     value === 'back end' ||
-    value === 'be'
+    value === 'be' ||
+    value === 'mcs' 
   ) {
     return 'Backend';
   }
 
   if (
     value === 'mobile' ||
-    value === 'android' ||
-    value === 'ios'
+    value === 'android' 
   ) {
     return 'Mobile';
   }
@@ -1196,7 +1196,7 @@ resolver.define('getEpicStoryDetails', async (req) => {
 resolver.define('exportExcelReport', async (req) => {
   const payload = req.payload || {};
   const FASTAPI_REPORT_URL =
-    'https://arrivals-customize-thompson-cosmetics.trycloudflare.com/api/v1/reporting/export-excel';
+    'https://march-everything-ever-generated.trycloudflare.com/api/v1/reporting/export-excel';
 
   try {
     console.log('[Export Excel] Calling Python Excel Reporter:', FASTAPI_REPORT_URL);
@@ -1388,7 +1388,7 @@ resolver.define(
       // ========================================================
 
       const FASTAPI_URL =
-        "https://arrivals-customize-thompson-cosmetics.trycloudflare.com/api/v1/predict";
+        "https://march-everything-ever-generated.trycloudflare.com/api/v1/predict";
 
       console.log('========================================');
       console.log('[DEBUG JIRA → FASTAPI]');

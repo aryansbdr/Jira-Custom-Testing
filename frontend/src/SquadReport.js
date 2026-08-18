@@ -527,7 +527,7 @@ export function SquadReport() {
           {/* Story Selector */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <label htmlFor="story-top-select" style={{ fontSize: '12px', fontWeight: 600, color: 'var(--ds-text-subtle, #8C9BAB)' }}>
-              Story:
+              Story/Task:
             </label>
             <select
               id="story-top-select"
@@ -546,7 +546,7 @@ export function SquadReport() {
                 outline: 'none'
               }}
             >
-              <option value="ALL" style={{ backgroundColor: '#22272B', color: '#DCDFE4' }}>Semua Story ({stories.length})</option>
+              <option value="ALL" style={{ backgroundColor: '#22272B', color: '#DCDFE4' }}>Semua Story/Task ({stories.length})</option>
               {stories.map((s) => (
                 <option key={s.key} value={s.key} style={{ backgroundColor: '#22272B', color: '#DCDFE4' }}>
                   [{s.key}] {s.summary}
