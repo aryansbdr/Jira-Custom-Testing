@@ -397,7 +397,7 @@ export default function SubTaskRecommendation({ issueKey }) {
               cursor: loading || !issueKey ? 'not-allowed' : 'pointer',
             }}
           >
-           Generate Sub-Task Recommendations
+            ✨ Generate Sub-Task Recommendations
           </button>
         </div>
       ) : (
@@ -466,13 +466,38 @@ export default function SubTaskRecommendation({ issueKey }) {
           {groups.length === 0 ? (
             <div
               style={{
-                padding: '16px',
+                padding: '32px 16px',
                 textAlign: 'center',
-                color: 'var(--ds-text-subtle, #5E6C84)',
-                fontSize: '12px',
               }}
             >
-              Tidak ada rekomendasi sub-task.
+              <div style={{ fontSize: '28px', marginBottom: '8px' }}>
+                {statusType === 'error' ? '⚠️' : '✅'}
+              </div>
+              <div
+                style={{
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  color: 'var(--ds-text, #172B4D)',
+                  marginBottom: '4px',
+                }}
+              >
+                {statusType === 'error'
+                  ? 'Rekomendasi gagal dibuat'
+                  : 'Tidak ada rekomendasi baru'}
+              </div>
+              <div
+                style={{
+                  fontSize: '12px',
+                  color: 'var(--ds-text-subtle, #5E6C84)',
+                  maxWidth: '260px',
+                  margin: '0 auto',
+                  lineHeight: 1.5,
+                }}
+              >
+                {statusType === 'error'
+                  ? 'Terjadi kendala saat memanggil AI. Coba klik Regenerate untuk mencoba lagi.'
+                  : 'AI tidak menemukan sub-task tambahan yang relevan untuk issue ini — kemungkinan semua sub-task yang diperlukan sudah ada.'}
+              </div>
             </div>
           ) : (
             groups.map((group, groupIdx) => (
@@ -571,20 +596,25 @@ export default function SubTaskRecommendation({ issueKey }) {
                             minWidth: 0,
                           }}
                         >
-                          <span
+                          <button
                             onClick={() => handleRemoveTask(groupIdx, task.id)}
+                            aria-label={`Abaikan rekomendasi: ${task.text || task.summary}`}
+                            title="Abaikan rekomendasi"
                             style={{
+                              background: 'none',
+                              border: 'none',
+                              padding: 0,
                               color: 'var(--ds-text-danger, #DE350B)',
                               cursor: 'pointer',
                               fontWeight: 'bold',
                               fontSize: '14px',
-                              width: '12px',
+                              width: '16px',
+                              height: '16px',
                               flexShrink: 0,
                             }}
-                            title="Abaikan rekomendasi"
                           >
                             ✕
-                          </span>
+                          </button>
 
                           <div
                             style={{
