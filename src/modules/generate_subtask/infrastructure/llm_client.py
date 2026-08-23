@@ -18,25 +18,21 @@ def _closest_fibonacci(val: float) -> float:
 
 
 class LlmClient(ILlmClient):
-    """
-    Unified LLM Client supporting both OpenAI (GPT-4o / GPT-4o-mini)
-    and Google Gemini (1.5-flash / 2.0-flash / 2.5-flash) with seamless auto-fallback.
-    """
 
     _SYSTEM_PROMPT = (
-        "Role: BRI Scrum Master. Decompose User Story into subtasks strictly using AC terms and RAG DB naming style with standard english naming convention.\n\n"
+        "Role: BRI Scrum Master. Decompose User Story into granular subtasks strictly matching AC and RAG dataset patterns.\n\n"
         "RULES:\n"
-        "1. Subtask Prefixes & Roles:\n"
-        "   - 'BE - <Title>': General Web Backend API / microservices / database (role: 'backend').\n"
-        "   - 'WEB - <Title>': Web Frontend portal / UI / screens (role: 'frontend').\n"
-        "   - Mobile UI (Pemrakarsa/Pemutus): When AC mentions prakarsa/pemrakarsa or pemutus on mobile screens/layouts/forms, use '[Mobile Pemrakarsa] <Title>' or '[Mobile Pemutus] <Title>' with role: 'frontend'.\n"
-        "   - Mobile Backend (MCS): When AC mentions mobile API / channel service / integration service, use '[MCS Pemrakarsa] <Title>' or '[MCS Pemutus] <Title>' (or 'MCS - <Title>') with role: 'backend'.\n"
-        "   - EXCLUDE QA: DO NOT generate QA, testing, or UAT subtasks. Testing/QA tasks are handled separately.\n"
-        "2. Exact AC Terms: Output subtasks STRICTLY based on features, components, modals, and endpoints explicitly stated in the AC description. NEVER invent unmentioned features, testing tasks, URL paths, or class names.\n"
-        "3. Verbs: Adopt action verbs from RAG DB patterns (Migration/Create/Design Spec/Connecting). Do NOT use informal Indonesian verbs.\n"
-        "4. CONSOLIDATION: Merge sibling items that share the same action verb and component type into ONE subtask using 'and' or '/'. Only split if functionally different.\n"
-        "5. PRESERVE DOMAIN TERMS: Do NOT translate Indonesian business/domain terms to English. Keep words like 'debitur', 'disposisi', 're-disposisi', 'prakarsa', 'pemrakarsa', 'pemutus', 'pencairan', 'korporasi', 'termin', 'rekening' exactly as written in the AC.\n"
-        "6. Output JSON format: {\"subtasks\":[{\"summary\":\"[Mobile Pemrakarsa] ... or [MCS Pemrakarsa] ... or BE - ... or WEB - ...\",\"role\":\"backend|frontend\",\"story_points\":1.0}]}\n\n"
+        "1. ROLE ASSIGNMENT & BACKEND / FRONTEND DECOMPOSITION:\n"
+        "   - Assign role 'frontend' (or 'mobile' for mobile context) for UI screens, layouts, input fields, cascading dropdowns, camera/gallery UI, and client-side form validations.\n"
+        "   - Assign role 'backend' for data queries, filter processing, business logic calculations, database storage, and external integrations.\n"
+        "   - If a feature requires backend processing (e.g. data filtering, search query, calculations) but NO specific endpoint path is written in the AC/Todo, create a functional BE task like 'Implement Query Filtering by <Criteria>' or 'Handle Data Filtering for <Feature>'. NEVER fabricate/invent imaginary URL paths (e.g. do NOT guess '/v1/fake_endpoint'). Only use 'Create Endpoint <path>' if the exact path or endpoint name is explicitly provided in the text.\n"
+        "2. NAMING CONVENTIONS & DETAIL PRESERVATION:\n"
+        "   - Use standard technical verbs: 'Create Layout', 'Create Component <Name>', 'Create Dropdown <Name>', 'Create Datepicker <Name>', 'Implement <Logic Name> Logic', 'Implement Query Filtering by <Criteria>', 'Save <Data> to <Table>'.\n"
+        "   - PRESERVE SPECIFIC OPTIONS / VALUES: When the AC/Description explicitly lists options, choices, or values for dropdowns, radios, or badges (e.g. 'Draft, Review, Disetujui, Ditolak'), INCLUDE them in parentheses in the title, e.g. 'Create Dropdown for Status Pengajuan (Draft, Review, Disetujui, Ditolak)'.\n"
+        "   - Preserve domain terms ('Debitur', 'PTK', 'Pengajuan Kredit', 'Risalah RKK', 'KUBL', 'Pencairan', 'MAB', etc.).\n"
+        "3. CONSOLIDATION: Sibling fields in the same section may merge with 'and'/'/'. Merge button states (visible/disabled) into ONE single task with state validation.\n\n"
+        'Output JSON (Clean titles without role prefix; role is "frontend", "backend", or "mobile"):\n'
+        '{"subtasks":[{"summary":"Create Layout for Risalah RKK","role":"frontend","story_points":1.0},{"summary":"Create Dropdown for Status Pengajuan (Draft, Review, Disetujui, Ditolak)","role":"frontend","story_points":1.0},{"summary":"Save KUBL Data to content_data_kbli","role":"backend","story_points":1.0}]}\n\n'
     )
 
     def _get_gemini_api_keys(self) -> List[str]:
@@ -46,7 +42,26 @@ class LlmClient(ILlmClient):
     def get_text_embedding(self, text: str) -> List[float]:
         cleaned_text = str(text)[:4000]
 
-        # 1. Try OpenAI Embedding if key exists
+        # 1. Try Gemini Embedding first to match 3072-dim vectors stored in subtasks.db
+        gemini_keys = self._get_gemini_api_keys()
+        if gemini_keys:
+            for key in gemini_keys:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.EMBEDDING_MODEL}:embedContent?key={key}"
+                headers = {"Content-Type": "application/json"}
+                payload = {
+                    "model": f"models/{settings.EMBEDDING_MODEL}",
+                    "content": {"parts": [{"text": cleaned_text}]},
+                }
+                try:
+                    response = requests.post(url, json=payload, headers=headers, timeout=5)
+                    if response.status_code == 200:
+                        res_data = response.json()
+                        if "embedding" in res_data and "values" in res_data["embedding"]:
+                            return res_data["embedding"]["values"]
+                except Exception:
+                    pass
+
+        # 2. Fallback to OpenAI Embedding if Gemini fails or key not set
         if settings.OPENAI_API_KEY:
             try:
                 url = "https://api.openai.com/v1/embeddings"
@@ -62,32 +77,9 @@ class LlmClient(ILlmClient):
                 if response.status_code == 200:
                     return response.json()["data"][0]["embedding"]
             except Exception as e:
-                print(f"[LLM Client] OpenAI Embedding failed: {e}. Falling back to Gemini...")
+                print(f"[LLM Client] OpenAI Embedding failed: {e}")
 
-        # 2. Fallback to Gemini Embedding
-        gemini_keys = self._get_gemini_api_keys()
-        if not gemini_keys:
-            raise ValueError("Neither OPENAI_API_KEY nor GEMINI_API_KEY is configured.")
-
-        last_err = None
-        for key in gemini_keys:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.EMBEDDING_MODEL}:embedContent?key={key}"
-            headers = {"Content-Type": "application/json"}
-            payload = {
-                "model": f"models/{settings.EMBEDDING_MODEL}",
-                "content": {"parts": [{"text": cleaned_text}]},
-            }
-            try:
-                response = requests.post(url, json=payload, headers=headers, timeout=5)
-                if response.status_code == 200:
-                    res_data = response.json()
-                    if "embedding" in res_data and "values" in res_data["embedding"]:
-                        return res_data["embedding"]["values"]
-                last_err = f"Gemini Embedding API error ({response.status_code}): {response.text}"
-            except Exception as e:
-                last_err = str(e)
-
-        raise Exception(f"All embedding providers failed. Last error: {last_err}")
+        raise Exception("Failed to generate embedding with all configured providers.")
 
     def _clean_ac_text(self, text: str) -> str:
         """Sanitize and compress AC text to eliminate unnecessary tokens (HTML tags, wiki markup, excess whitespace)."""
@@ -105,20 +97,18 @@ class LlmClient(ILlmClient):
 
   
     _MOBILE_CONTEXT_KEYWORDS = [
-        # Domain-specific triggers (BRISpot mobile workflow roles)
-        "pemrakarsa",
-        "prakarsa",
-        "pemutus",
-        "prescreening",
-        "mikro",
-        "kur",
-        "slik",
-        "ots",
         "mobile",
         "mobile app",
+        "brispot",
         "android",
         "ios",
-        "aplikasi",
+        "aplikasi mobile",
+        "ots",
+        "prescreening",
+        "camera brispot",
+        "galeri brispot",
+        "layout mobile",
+        "activity android",
     ]
 
     def generate_subtasks_from_ac(
@@ -179,6 +169,7 @@ class LlmClient(ILlmClient):
                         {"role": "user", "content": user_content},
                     ],
                     "temperature": 0.0,
+                    "seed": 42,
                     "response_format": {"type": "json_object"},
                     "max_tokens": 1500,
                 }
@@ -189,7 +180,7 @@ class LlmClient(ILlmClient):
                             res_data = response.json()
                             raw_text = res_data["choices"][0]["message"]["content"].strip()
                             parsed = json.loads(raw_text)
-                            result = self._parse_subtasks(parsed, safe_summary)
+                            result = self._parse_subtasks(parsed, safe_summary, safe_desc)
                             # Strip hallucinated Mobile subtasks when the story has no mobile context
                             if not has_mobile_context:
                                 result = [s for s in result if s.role != "mobile"]
@@ -240,7 +231,7 @@ class LlmClient(ILlmClient):
                             candidate = res_data["candidates"][0]
                             text_content = candidate["content"]["parts"][0]["text"].strip()
                             parsed = json.loads(text_content)
-                            result = self._parse_subtasks(parsed, safe_summary)
+                            result = self._parse_subtasks(parsed, safe_summary, safe_desc)
                             # Strip hallucinated Mobile subtasks when the story has no mobile context
                             if not has_mobile_context:
                                 result = [s for s in result if s.role != "mobile"]
@@ -270,8 +261,28 @@ class LlmClient(ILlmClient):
         "insert into", "select from",
     ]
 
-    def _parse_subtasks(self, parsed: dict, safe_summary: str) -> List[Subtask]:
+    def _parse_subtasks(self, parsed: dict, safe_summary: str, safe_desc: str = "") -> List[Subtask]:
         subtasks = []
+        combined_text = (safe_summary + " " + (safe_desc or "")).lower()
+        has_web_or_corp = any(
+            kw in combined_text
+            for kw in ["korporasi", "mab", "web", "portal", "dashboard", "fe ", " fe", "ui", "tab ", "halaman", "browser"]
+        )
+        has_mobile_keyword = any(
+            kw in combined_text
+            for kw in [
+                "mobile", "brispot", "android", "ios", "mantri", "aplikasi mobile", "mobile app",
+                "hanya untuk mobile", "untuk mobile", "camera brispot", "galeri brispot", "ots"
+            ]
+        )
+        has_mobile_story = has_mobile_keyword and not has_web_or_corp
+        is_pemutus = has_mobile_story and "pemutus" in combined_text
+        is_pemrakarsa = has_mobile_story and ("pemrakarsa" in combined_text or "prescreening" in combined_text)
+        is_bracket_mobile = is_pemrakarsa or is_pemutus
+
+        mobile_tag = "[Mobile Pemutus]" if is_pemutus else "[Mobile Pemrakarsa]"
+        msc_tag = "[MSC Pemutus]" if is_pemutus else "[MSC Prakarsa]"
+
         for sub in parsed.get("subtasks", []):
             summary_text = sub.get("summary", "").strip()
             # Clean Jira markup symbols ({*}, {*}, *}, and single asterisks *) from title
@@ -279,45 +290,44 @@ class LlmClient(ILlmClient):
             role_val = str(sub.get("role", "backend")).lower()
             raw_sp = sub.get("story_points", 1.0)
 
-            # Check if summary originally starts with MCS or Mobile
-            is_mcs_prefix = bool(re.match(r'^mcs\s*-\s*', summary_text, flags=re.IGNORECASE))
-            is_mobile_prefix = bool(re.match(r'^mobile\s*-\s*', summary_text, flags=re.IGNORECASE))
-
-            # Strip all leading role prefixes (BE -, WEB -, FE -, WEBAPP -, Mobile -, MCS -, etc.)
-            clean_body = re.sub(r'^((be|web|fe|webapp|mobile|mcs|qa)\s*-\s*)+', '', summary_text, flags=re.IGNORECASE).strip()
-            clean_body_lower = clean_body.lower()
-
-            # --- Role Resolution (LLM declaration first) ---
-            if is_mcs_prefix:
-                role_key = "mobile"
-                prefix = "MCS - "
-            elif is_mobile_prefix or "mobile" in role_val or "android" in role_val or "ios" in role_val:
-                role_key = "mobile"
-                # If the body is explicitly about backend/service/API for mobile channel, use MCS -
-                if any(kw in clean_body_lower for kw in ["service", "api", "endpoint", "channel", "backend", "inquiry", "integrasi"]):
-                    prefix = "MCS - "
-                else:
-                    prefix = "MOBILE - "
-            elif "frontend" in role_val or "web" in role_val or "fe" == role_val:
-                role_key = "frontend"
-                if any(kw in clean_body_lower for kw in self._BACKEND_OVERRIDE_KEYWORDS):
-                    role_key = "backend"
-                    prefix = "BE - "
-                else:
-                    prefix = "WEB - "
-            elif "qa" in role_val or "tester" in role_val or any(clean_body_lower.startswith(k) for k in ["qa", "testing", "test execution", "uat", "sit"]):
-                # QA tasks are not generated
+            # Drop QA/Testing and SDLC boilerplate noise in code
+            if role_val in ("qa", "tester", "testing") or re.search(r'(\bqa\b|\btesting\b|\buat\b|\banalyze requirements\b|\bpayload structure\b|\brequest validation\b|\bmap request payload\b|\bcode review\b|\bdesign review\b)', summary_text, flags=re.IGNORECASE):
                 continue
+
+            # Strip all leading role prefixes (BE -, WEB -, FE -, WEBAPP -, Mobile -, MSC -, MCS -, etc.)
+            clean_body = re.sub(r'^((be|web|fe|webapp|mobile|msc|mcs|qa)\s*-\s*)+', '', summary_text, flags=re.IGNORECASE).strip()
+
+            # Auto-standardize [MCS ...] to [MSC ...]
+            if clean_body.upper().startswith("[MCS"):
+                clean_body = re.sub(r'^\[MCS', '[MSC', clean_body, flags=re.IGNORECASE)
+
+            # Determine role: respect AI role_val or bracket tag
+            if clean_body.startswith("[MSC") or clean_body.startswith("MSC -") or clean_body.startswith("BE -") or role_val == "backend":
+                role_key = "backend"
+                clean_body_no_bracket = re.sub(r'^\[(MSC|MCS|BE)[^\]]*\]\s*', '', clean_body, flags=re.IGNORECASE).strip()
+                if has_mobile_story:
+                    final_summary = f"{msc_tag} {clean_body_no_bracket}" if is_bracket_mobile else f"MSC - {clean_body_no_bracket}"
+                else:
+                    final_summary = f"BE - {clean_body_no_bracket}"
+            elif clean_body.startswith("[Mobile") or clean_body.startswith("MOBILE -") or role_val in ("mobile", "frontend", "fe", "web"):
+                clean_body_no_bracket = re.sub(r'^\[(Mobile|WEB|FE)[^\]]*\]\s*', '', clean_body, flags=re.IGNORECASE).strip()
+                if has_mobile_story or role_val == "mobile":
+                    role_key = "mobile"
+                    final_summary = f"{mobile_tag} {clean_body_no_bracket}" if is_bracket_mobile else f"MOBILE - {clean_body_no_bracket}"
+                else:
+                    role_key = "frontend"
+                    final_summary = f"WEB - {clean_body_no_bracket}"
             else:
                 role_key = "backend"
-                prefix = "BE - "
-
-            summary_text = f"{prefix}{clean_body}"
+                if has_mobile_story:
+                    final_summary = f"{msc_tag} {clean_body}" if is_bracket_mobile else f"MSC - {clean_body}"
+                else:
+                    final_summary = f"BE - {clean_body}"
 
             subtasks.append(
                 Subtask(
-                    summary=summary_text,
-                    description=sub.get("description", summary_text),
+                    summary=final_summary,
+                    description=sub.get("description", final_summary),
                     role=role_key,
                     story_points=_closest_fibonacci(raw_sp),
                 )
@@ -380,6 +390,7 @@ class LlmClient(ILlmClient):
                         {"role": "user", "content": gap_user_content},
                     ],
                     "temperature": 0.0,
+                    "seed": 42,
                     "response_format": {"type": "json_object"},
                     "max_tokens": 800,
                 }

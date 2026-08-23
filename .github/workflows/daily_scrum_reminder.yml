@@ -2,12 +2,10 @@ name: Daily Scrum & Sprint Reminder (Telegram)
 
 on:
   schedule:
-    # 01:45 UTC = 08:45 WIB (Pagi sebelum Daily Standup, Senin-Jumat)
-    - cron: '45 1 * * 1-5'
+    # 01:15 UTC = 08:15 WIB (Pagi sebelum Daily Standup, Senin-Jumat - Diatur di menit sepi agar bebas antrian)
+    - cron: '15 1 * * 1-5'
     # 09:30 UTC = 16:30 WIB (Sore Wrap-up Harian, Senin-Jumat)
     - cron: '30 9 * * 1-5'
-    # Test cron trigger untuk jam 15:30 WIB (08:30 UTC)
-    - cron: '30 8 * * *'
   workflow_dispatch: # Tombol manual trigger di web GitHub Actions
 
 jobs:
@@ -44,12 +42,19 @@ jobs:
           LLM_PROVIDER: ${{ secrets.LLM_PROVIDER || 'openai' }}
         run: |
           python -c "
-          import sys
+          import sys, datetime, zoneinfo
           sys.path.insert(0, 'src')
           from modules.notification.infrastructure.notification_scheduler import NotificationSchedulerService
           
           scheduler = NotificationSchedulerService()
           target_project = '${{ vars.TARGET_PROJECT_KEY || 'JT' }}'
-          print(f'[Cloud GitHub Actions] Triggering Sprint Reminder for project: {target_project}')
-          scheduler.run_morning_reminder(target_project)
+          now_wib = datetime.datetime.now(zoneinfo.ZoneInfo('Asia/Jakarta'))
+          print(f'[Cloud GitHub Actions] Execution time: {now_wib.strftime(\"%Y-%m-%d %H:%M:%S WIB\")}')
+          
+          if now_wib.hour >= 14:
+              print(f'[Cloud GitHub Actions] Triggering Afternoon Wrap-up Reminder (16:00 WIB) for project: {target_project}')
+              scheduler.run_afternoon_reminder(target_project)
+          else:
+              print(f'[Cloud GitHub Actions] Triggering Morning Standup Reminder (08:15 WIB) for project: {target_project}')
+              scheduler.run_morning_reminder(target_project)
           "

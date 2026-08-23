@@ -136,21 +136,21 @@ class NotificationSchedulerService:
     def start(self) -> None:
         """Starts the background scheduler with configured cron triggers and runs catch-up if needed."""
         if not self.is_running:
-            # 1. Morning Standup Reminder: Senin - Jumat pukul 08:45 WIB (Asia/Jakarta)
+            # 1. Morning Standup Reminder: Senin - Jumat pukul 08:15 WIB (Asia/Jakarta)
             self.scheduler.add_job(
                 func=self.run_morning_reminder,
-                trigger=CronTrigger(day_of_week="mon-fri", hour=8, minute=45, timezone="Asia/Jakarta"),
+                trigger=CronTrigger(day_of_week="mon-fri", hour=8, minute=15, timezone="Asia/Jakarta"),
                 id="morning_standup_reminder",
-                name="Daily Morning Standup Reminder (08:45 WIB)",
+                name="Daily Morning Standup Reminder (08:15 WIB)",
                 replace_existing=True,
             )
 
-            # 2. Afternoon Progress Wrap-up: Senin - Jumat pukul 16:30 WIB (Asia/Jakarta)
+            # 2. Afternoon Progress Wrap-up: Senin - Jumat pukul 16:00 WIB (Asia/Jakarta)
             self.scheduler.add_job(
                 func=self.run_afternoon_reminder,
-                trigger=CronTrigger(day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Jakarta"),
+                trigger=CronTrigger(day_of_week="mon-fri", hour=16, minute=0, timezone="Asia/Jakarta"),
                 id="afternoon_wrapup_reminder",
-                name="Daily Afternoon Wrap-up (16:30 WIB)",
+                name="Daily Afternoon Wrap-up (16:00 WIB)",
                 replace_existing=True,
             )
 

@@ -1,5 +1,10 @@
 import os
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
+
+# Explicitly load .env file from root directory
+env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
+load_dotenv(dotenv_path=env_path, override=True)
 
 
 class Settings(BaseSettings):
@@ -11,7 +16,7 @@ class Settings(BaseSettings):
     # OpenAI Configuration
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini")
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openai")
 
 
 

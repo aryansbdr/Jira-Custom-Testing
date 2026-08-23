@@ -21,14 +21,11 @@ class TelegramBotClient(INotificationClient):
 
         target_chat_id = str(chat_id or settings.TELEGRAM_CHAT_ID or "").strip().strip('"').strip("'")
 
-        if not bot_token:
-            raise ValueError(
-                "TELEGRAM_BOT_TOKEN is not configured in environment or .env file."
-            )
-        if not target_chat_id:
-            raise ValueError(
-                "TELEGRAM_CHAT_ID is not configured in environment or .env file."
-            )
+        if not bot_token or not target_chat_id:
+            safe_preview = message.encode("ascii", errors="ignore").decode("ascii")
+            print("[Telegram Client Warning] TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not configured in .env file.")
+            print(f"[Generated Notification Preview]:\n{safe_preview}\n")
+            return False
 
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         payload = {

@@ -453,6 +453,21 @@ class JiraRestClient(IJiraClient):
         headers = self._get_headers()
         base_url = settings.JIRA_URL.rstrip("/")
         
+        # Check if root_key is a direct JQL Query string (e.g. "project = BL AND resolution = Unresolved...")
+        lower_key = key.lower()
+        if (
+            " AND " in key or " OR " in key or "order by" in lower_key or
+            lower_key.startswith("project =") or lower_key.startswith("project=") or
+            lower_key.startswith("project in") or lower_key.startswith("assignee ") or
+            lower_key.startswith("issuetype ") or lower_key.startswith("status ")
+        ):
+            return {
+                "type": "jql",
+                "id": "custom_jql",
+                "title": "Custom JQL Search Query",
+                "jql": key,
+            }
+
         # Check for numeric ID in URL or raw digits
         num_id = None
         if "selectPageId=" in key:
@@ -650,13 +665,22 @@ class JiraRestClient(IJiraClient):
         resolved_board_id = target_info.get("board_id")
 
       
-        if resolved_sprint_id:
+        if target_type == "jql" or target_info.get("jql"):
+            custom_jql = target_info.get("jql") or root_key
+            issues_raw = self._execute_jql_search(
+                jql=custom_jql,
+                fields=["summary", "status", "assignee", "parent", "issuetype", "subtasks", "components", "customfield_10102", settings.JIRA_STORY_POINTS_FIELD],
+                max_results=200
+            )
+            root_summary = f"JQL: {custom_jql[:60]}..."
+
+        elif resolved_sprint_id:
             try:
                 iss_res = requests.get(
                     f"{base_jira_url}/rest/agile/1.0/sprint/{resolved_sprint_id}/issue",
                     headers=headers,
                     auth=auth,
-                    params={"fields": f"summary,status,assignee,parent,issuetype,{settings.JIRA_STORY_POINTS_FIELD}", "maxResults": 200},
+                    params={"fields": f"summary,status,assignee,parent,issuetype,subtasks,{settings.JIRA_STORY_POINTS_FIELD}", "maxResults": 200},
                     timeout=30,
                 )
                 if iss_res.status_code == 200:
@@ -708,7 +732,7 @@ class JiraRestClient(IJiraClient):
                                 f"{base_jira_url}/rest/agile/1.0/sprint/{sprint_id}/issue",
                                 headers=headers,
                                 auth=auth,
-                                params={"fields": f"summary,status,assignee,parent,issuetype,{settings.JIRA_STORY_POINTS_FIELD}", "maxResults": 200},
+                                params={"fields": f"summary,status,assignee,parent,issuetype,subtasks,{settings.JIRA_STORY_POINTS_FIELD}", "maxResults": 200},
                                 timeout=30,
                             )
                             if iss_res.status_code == 200:
@@ -795,29 +819,29 @@ class JiraRestClient(IJiraClient):
         # Helper for subtask role inference
         def _infer_task_role(summary_str: str) -> str:
             s = summary_str.strip().lower()
-            # 1. SAD / System Design / Documentation check first
-            if re.search(r'\b(system design|design system|dokumen utama|product backlog|iad|bmc|sprint plan|service dependency|security review|summary design|risk register|risk management|user manual|user sign-off|architecture|sad|it control checklist|sprint retrospective|dokumen pengembangan|fsd|brd)\b', s):
-                return "SAD"
-            if re.search(r'^(?:\[\s*sad\s*\]|sad\s*[-:]|system design\s*[-:]|dokumen\s*[-:])', s):
-                return "SAD"
-            # 2. Frontend check
+            # 1. Prefix checks MUST ALWAYS TAKE PRECEDENCE!
             if re.search(r'^(?:\[\s*fe\s*\]|\[\s*frontend\s*\]|\[\s*web\s*\]|fe\s*[-:]|web\s*[-:]|frontend\s*[-:])', s):
                 return "Frontend"
-            if re.search(r'\b(frontend|react|vue|angular|css|html|layout|modal|navbar|sidebar|screen|figma|ui/ux|view|page|halaman|tampilan)\b', s):
-                return "Frontend"
-            # 3. QA check
-            if re.search(r'^(?:\[\s*qa\s*\]|\[\s*qc\s*\]|\[\s*test\s*\]|qa\s*[-:]|qc\s*[-:]|test\s*[-:]|testing\s*[-:])', s):
-                return "QA"
-            if re.search(r'\b(qa|qc|sit|uat|dast|sast|pentest|testing|test requirement|test plan|test case)\b', s):
-                return "QA"
-            # 4. Mobile check
-            if re.search(r'^(?:\[\s*mobile\s*\]|\[\s*android\s*\]|\[\s*ios\s*\]|mobile\s*[-:]|android\s*[-:]|ios\s*[-:])', s):
-                return "Mobile"
-            if re.search(r'\b(mobile|android|ios|apk|flutter|react native|mcs)\b', s):
-                return "Mobile"
-            # 5. Backend check
             if re.search(r'^(?:\[\s*be\s*\]|\[\s*backend\s*\]|\[\s*job\s*\]|\[\s*las\s*\]|be\s*[-:]|backend\s*[-:]|api\s*[-:])', s):
                 return "Backend"
+            if re.search(r'^(?:\[\s*mobile\s*\]|\[\s*android\s*\]|\[\s*ios\s*\]|mobile\s*[-:]|android\s*[-:]|ios\s*[-:])', s):
+                return "Mobile"
+            if re.search(r'^(?:\[\s*sad\s*\]|sad\s*[-:]|system design\s*[-:]|dokumen\s*[-:])', s):
+                return "SAD"
+            if re.search(r'^(?:\[\s*qa\s*\]|\[\s*qc\s*\]|\[\s*test\s*\]|qa\s*[-:]|qc\s*[-:]|test\s*[-:]|testing\s*[-:])', s):
+                return "QA"
+
+            # 2. SAD / System Design / Documentation keyword check
+            if re.search(r'\b(system design|design system|dokumen utama|product backlog|iad|bmc|sprint plan|service dependency|security review|summary design|risk register|risk management|user manual|user sign-off|architecture|it control checklist|sprint retrospective|dokumen pengembangan|fsd|brd)\b', s):
+                return "SAD"
+
+            # 3. Keyword checks
+            if re.search(r'\b(frontend|react|vue|angular|css|html|layout|modal|navbar|sidebar|screen|figma|ui/ux|view|page|halaman|tampilan)\b', s):
+                return "Frontend"
+            if re.search(r'\b(qa|qc|sit|uat|dast|sast|pentest|testing|test requirement|test plan|test case)\b', s):
+                return "QA"
+            if re.search(r'\b(mobile|android|ios|apk|flutter|react native|msc|mcs)\b', s):
+                return "Mobile"
             if re.search(r'\b(backend|api|endpoint|database|query|service|controller|model|repository|cron|job|kafka|redis|sql|table)\b', s):
                 return "Backend"
             return "Backend"
@@ -854,8 +878,90 @@ class JiraRestClient(IJiraClient):
         total_in_progress = 0
         total_done = 0
 
-        # 2. Process all retrieved issues & subtasks
+        # Expand issues_raw to include real child subtasks under parent Stories/Tasks
+        expanded_issues = []
         for item in issues_raw:
+            itype_obj = item.get("fields", {}).get("issuetype") or {}
+            is_sub = itype_obj.get("subtask", False)
+            if is_sub:
+                expanded_issues.append(item)
+            else:
+                p_key = item.get("key", "")
+                p_sum = item.get("fields", {}).get("summary", "")
+                p_assignee = (item.get("fields", {}).get("assignee") or {}).get("displayName", "Unassigned")
+                epic_obj = item.get("fields", {}).get("parent") or {}
+                epic_key = epic_obj.get("key", "")
+                epic_summary = epic_obj.get("fields", {}).get("summary", "")
+
+                if p_key and p_key not in story_map:
+                    story_map[p_key] = {
+                        "key": p_key,
+                        "summary": p_sum,
+                        "owner": p_assignee if p_assignee != "Unassigned" else "-",
+                        "todo": 0,
+                        "in_progress": 0,
+                        "done": 0,
+                        "total_subtasks": 0,
+                    }
+                child_subs = item.get("fields", {}).get("subtasks", [])
+                if child_subs:
+                    for sub_item in child_subs:
+                        if "fields" not in sub_item:
+                            sub_item["fields"] = {}
+                        if "parent" not in sub_item["fields"]:
+                            sub_item["fields"]["parent"] = {"key": p_key, "fields": {"summary": p_sum}}
+                        sub_item["fields"]["epic"] = {"key": epic_key, "summary": epic_summary}
+                        if "issuetype" not in sub_item["fields"]:
+                            sub_item["fields"]["issuetype"] = {"subtask": True, "name": "Sub-task"}
+                        expanded_issues.append(sub_item)
+                else:
+                    item_copy = dict(item)
+                    if "fields" not in item_copy:
+                        item_copy["fields"] = {}
+                    item_copy["fields"]["epic"] = {"key": epic_key, "summary": epic_summary}
+                    item_copy["fields"]["parent"] = {"key": p_key, "fields": {"summary": p_sum}}
+                    item_copy["fields"]["issuetype"] = {"subtask": True, "name": "Story"}
+                    item_copy["is_direct_story"] = True
+                    expanded_issues.append(item_copy)
+
+        # Batch enrich subtask details (assignee, status, etc.) via JQL search
+        sub_keys_to_fetch = [s.get("key") for s in expanded_issues if s.get("key") and ("assignee" not in s.get("fields", {}))]
+        if sub_keys_to_fetch:
+            subtask_data_map = {}
+            chunk_size = 50
+            for i in range(0, len(sub_keys_to_fetch), chunk_size):
+                chunk = sub_keys_to_fetch[i : i + chunk_size]
+                jql_query = f"issueKey in ({','.join(chunk)})"
+                try:
+                    s_res = requests.get(
+                        f"{base_jira_url}/rest/api/2/search",
+                        headers=headers,
+                        auth=auth,
+                        params={"jql": jql_query, "fields": f"summary,status,assignee,parent,issuetype,{settings.JIRA_STORY_POINTS_FIELD}", "maxResults": chunk_size},
+                        timeout=20,
+                    )
+                    if s_res.status_code == 200:
+                        for s_iss in s_res.json().get("issues", []):
+                            subtask_data_map[s_iss.get("key")] = s_iss
+                except Exception as e:
+                    print(f"Warning: Batch subtask fetch error: {e}")
+
+            for s_item in expanded_issues:
+                s_key = s_item.get("key")
+                if s_key in subtask_data_map:
+                    enriched_fields = subtask_data_map[s_key].get("fields", {})
+                    orig_epic = s_item.get("fields", {}).get("epic")
+                    orig_parent = s_item.get("fields", {}).get("parent")
+                    s_item["fields"].update(enriched_fields)
+                    if orig_epic:
+                        s_item["fields"]["epic"] = orig_epic
+                    if orig_parent and "parent" not in s_item["fields"]:
+                        s_item["fields"]["parent"] = orig_parent
+
+        target_items_to_process = expanded_issues if expanded_issues else issues_raw
+
+        # 2. Process all retrieved issues & subtasks
+        for item in target_items_to_process:
             issue_key = item.get("key", "")
             fields = item.get("fields", {})
             issue_summary = fields.get("summary", "")
@@ -909,6 +1015,9 @@ class JiraRestClient(IJiraClient):
             # Parent tracking
             parent_key = (fields.get("parent") or {}).get("key", "")
             parent_summary = (fields.get("parent") or {}).get("fields", {}).get("summary", "")
+            epic_key = (fields.get("epic") or {}).get("key", "")
+            epic_summary = (fields.get("epic") or {}).get("summary", "")
+
             if parent_key and parent_key not in story_map:
                 story_map[parent_key] = {
                     "key": parent_key,
@@ -929,23 +1038,24 @@ class JiraRestClient(IJiraClient):
                     story_map[parent_key]["todo"] += 1
 
             # Member progress tracking
-            if assignee_name != "Unassigned":
-                if assignee_name not in member_map:
-                    member_map[assignee_name] = {
-                        "name": assignee_name,
-                        "role": developer_final_roles.get(assignee_name, resolved_role),
-                        "todo": 0,
-                        "in_progress": 0,
-                        "done": 0,
-                        "total_subtasks": 0,
-                    }
-                member_map[assignee_name]["total_subtasks"] += 1
-                if normalized_status == "Done":
-                    member_map[assignee_name]["done"] += 1
-                elif normalized_status == "In Progress":
-                    member_map[assignee_name]["in_progress"] += 1
-                else:
-                    member_map[assignee_name]["todo"] += 1
+            member_key = assignee_name if assignee_name != "Unassigned" else "Belum Diambil (Unassigned)"
+            if member_key not in member_map:
+                member_map[member_key] = {
+                    "name": member_key,
+                    "role": "-" if member_key == "Belum Diambil (Unassigned)" else developer_final_roles.get(assignee_name, resolved_role),
+                    "todo": 0,
+                    "in_progress": 0,
+                    "done": 0,
+                    "total_subtasks": 0,
+                    "is_unassigned": member_key == "Belum Diambil (Unassigned)",
+                }
+            member_map[member_key]["total_subtasks"] += 1
+            if normalized_status == "Done":
+                member_map[member_key]["done"] += 1
+            elif normalized_status == "In Progress":
+                member_map[member_key]["in_progress"] += 1
+            else:
+                member_map[member_key]["todo"] += 1
 
             # Detailed subtask entry
             detailed_subtasks.append({
@@ -956,6 +1066,9 @@ class JiraRestClient(IJiraClient):
                 "status": normalized_status,
                 "parent_key": parent_key,
                 "parent_summary": parent_summary,
+                "epic_key": epic_key,
+                "epic_summary": epic_summary,
+                "is_direct_story": item.get("is_direct_story", False),
                 "story_points": 1.0,
                 "url": f"{base_jira_url}/browse/{issue_key}",
             })
@@ -1000,30 +1113,16 @@ class JiraRestClient(IJiraClient):
                     "url": f"{base_jira_url}/browse/{issue_key}",
                 })
 
-        # Ensure all active team members from Members.xlsx appear (only in project mode, not dashboard mode)
-        if active_employees and not is_dashboard:
-            for emp in active_employees:
-                name = getattr(emp, "name", None) or (emp.get("name") if isinstance(emp, dict) else "")
-                role = getattr(emp, "role", None) or (emp.get("role") if isinstance(emp, dict) else "")
-                if name and name not in member_map:
-                    member_map[name] = {
-                        "name": name,
-                        "role": role,
-                        "todo": 0,
-                        "in_progress": 0,
-                        "done": 0,
-                        "total_subtasks": 0,
-                    }
-
-        # Calculate percent done per member
+        # Calculate percent done per member (only include members who actually have tasks in Jira result)
         member_progress_list = []
         for m in member_map.values():
             tot = m["total_subtasks"]
-            m["percent_done"] = round((m["done"] / tot * 100), 1) if tot > 0 else 0.0
-            member_progress_list.append(m)
+            if tot > 0:
+                m["percent_done"] = round((m["done"] / tot * 100), 1)
+                member_progress_list.append(m)
 
-        # Sort members by active tasks count (descending) then name
-        member_progress_list.sort(key=lambda x: (x["total_subtasks"] > 0, x["total_subtasks"], x["name"]), reverse=True)
+        # Sort members by total tasks count (descending) then name
+        member_progress_list.sort(key=lambda x: (x["total_subtasks"], x["name"]), reverse=True)
 
         # Calculate percent done per story
         story_progress_list = []

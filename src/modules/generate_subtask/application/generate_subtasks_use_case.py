@@ -120,7 +120,7 @@ class GenerateSubtasksUseCase:
 
         # Inject Assignee Role Context if assigned engineer has specific role (especially Mobile/MCS)
         if assignee_role and "mob" in assignee_role.lower():
-            formatted_description += f"\n\n[MOBILE ENGINEER ASSIGNED]: Story ini di-assign ke engineer mobile '{assignee or 'Mobile Dev'}'. Buat subtask 'MOBILE - <Title>' untuk UI Mobile App atau 'MCS - <Title>' untuk Mobile Channel Service / Backend API Mobile sesuai rincian AC."
+            formatted_description += f"\n\n[MOBILE ENGINEER ASSIGNED]: Story ini di-assign ke engineer mobile '{assignee or 'Mobile Dev'}'. Buat subtask 'MOBILE - <Title>' untuk UI Mobile App atau 'MSC - <Title>' untuk Mobile Channel Service / Backend API Mobile sesuai rincian AC."
 
         # Exception Rule: Exclude Test & Deployment tickets from subtask generation as requested
         skip_test_keywords = [
@@ -169,20 +169,18 @@ class GenerateSubtasksUseCase:
                     summary=f"Design Security Review - {clean_title}",
                     description=f"Eksekusi Design Security Review untuk {clean_title}",
                     role="backend",
-                    story_points=1.0,
                 ),
                 Subtask(
                     summary=f"Code Review - {clean_title}",
                     description=f"Eksekusi Code Review & Static Analysis untuk {clean_title}",
                     role="backend",
-                    story_points=1.0,
+
                 ),
                 Subtask(
                     summary=testing_subtask_title,
                     description=testing_desc,
                     role="backend",
-                    story_points=1.0,
-                ),
+                )
             ]
 
         # 1. Generate query embedding combining summary & description for accurate RAG match
@@ -194,7 +192,8 @@ class GenerateSubtasksUseCase:
 
         def _normalize_str(s: str) -> str:
             cleaned = str(s or '')
-            cleaned = re.sub(r'^\[.*?\]\s*', '', cleaned)  # Strip [BL-38813] prefix if present
+            cleaned = re.sub(r'^(?:\[.*?\]|\b(?:be|web|fe|mobile)\s*-\s*)', '', cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r'^\s*(?:\d+[\.\)]|[a-z][\.\)]|[\-\*•])\s*', '', cleaned, flags=re.MULTILINE)
             return re.sub(r'\s+', ' ', cleaned).strip().lower()
 
         req_title_norm = _normalize_str(summary)
@@ -228,102 +227,120 @@ class GenerateSubtasksUseCase:
         if not top_match:
             top_match = candidate_stories[0] if candidate_stories else None
 
-        # Ultra-Strict 1-to-1 Exact Match Cloning ("Plek Ketiplek Sama" Judul, Key, atau AC)
-        def _normalize_str(s: str) -> str:
-            return re.sub(r'\s+', ' ', str(s or '')).strip().lower()
-
         clean_req_title = _normalize_str(summary)
         clean_db_title = _normalize_str(top_match.get("summary", "")) if top_match else ""
+        clean_req_desc = _normalize_str(description)
+        clean_db_desc = _normalize_str(top_match.get("description", "")) if top_match else ""
 
-        is_exact_key_match = bool(exact_key_match)
-        is_exact_title_match = (
-            top_match and (
-                clean_req_title == clean_db_title or
-                clean_req_title in clean_db_title or
-                clean_db_title in clean_req_title or
-                (top_match.get("issue_key") and top_match.get("issue_key", "").upper() in summary.upper())
-            )
-        )
-        is_exact_desc_match = (
-            top_match and _normalize_str(description) == _normalize_str(top_match.get("description", ""))
+        noise_regex = re.compile(
+            r'(\banalyze requirements\b|\bidentify affected modules\b|\brequest payload structure\b|\bimplement request validation\b|\bmap request payload\b|\breview\b.*(code|design|figma|existing|mab)|^\s*review\s+|\bcode review\b|\bdesign review\b)',
+            re.IGNORECASE
         )
 
-        is_plek_ketiplek_match = is_exact_key_match or is_exact_title_match or is_exact_desc_match
+        # Check if DB subtasks are genuinely valid (not empty or 100% boilerplate junk)
+        db_subs = top_match.get("subtasks", []) if top_match else []
+        valid_db_subs = [s for s in db_subs if not noise_regex.search(str(s.get("summary", "")).lower()) and s.get("role") not in ("qa", "tester")]
+        has_sufficient_valid_subs = len(valid_db_subs) >= 2
+
+        # Check similarity between descriptions (tolerant to whitespace/minor word differences)
+        def _calc_overlap(text_a: str, text_b: str) -> float:
+            if not text_a or not text_b:
+                return 0.0
+            words_a = set(text_a.split())
+            words_b = set(text_b.split())
+            if not words_a or not words_b:
+                return 0.0
+            intersection = words_a.intersection(words_b)
+            return len(intersection) / max(len(words_a), len(words_b))
+
+        desc_overlap = _calc_overlap(clean_req_desc, clean_db_desc)
+
+        # Exact match occurs when AC description is identical (or title/key match when desc is empty/identical) and valid subtasks exist in DB
+        is_exact_desc_match = bool(top_match and (clean_req_desc == clean_db_desc or desc_overlap >= 0.70) and has_sufficient_valid_subs)
+        is_exact_title_match = bool(top_match and clean_req_title and clean_req_title == clean_db_title and has_sufficient_valid_subs)
+        is_exact_key_match = bool(exact_key_match and has_sufficient_valid_subs)
+
+        is_plek_ketiplek_match = is_exact_desc_match or is_exact_title_match or is_exact_key_match
 
         if top_match and is_plek_ketiplek_match:
+            combined_text = f"{summary}\n{description or ''}".lower()
+            has_web_or_corp = any(kw in combined_text for kw in ["korporasi", "mab", "web", "portal", "dashboard", "fe ", " fe", "ui", "tab ", "halaman", "browser"])
+            has_mobile_keyword = any(kw in combined_text for kw in ["mobile", "brispot", "android", "ios", "mantri", "aplikasi mobile", "mobile app", "hanya untuk mobile", "untuk mobile", "camera brispot", "galeri brispot", "ots"])
+            is_mobile_story = has_mobile_keyword and not has_web_or_corp
+            is_pemutus = is_mobile_story and "pemutus" in combined_text
+            is_pemrakarsa = is_mobile_story and ("pemrakarsa" in combined_text or "prescreening" in combined_text)
+            is_bracket_mobile = is_pemrakarsa or is_pemutus
+            role_tag = "[Mobile Pemutus]" if is_pemutus else ("[Mobile Pemrakarsa]" if is_pemrakarsa else "MOBILE -")
+            msc_tag = "[MSC Pemutus]" if is_pemutus else ("[MSC Prakarsa]" if is_pemrakarsa else "MSC -")
             cloned_subtasks = []
+
             for sub in top_match["subtasks"]:
                 summary_text = str(sub["summary"]).strip()
-                summary_lower = summary_text.lower()
+                sub_lower = summary_text.lower()
                 
-                # Filter out generic noise tasks (Review Existing Code, Review Design Figma, Review MAB, etc.)
-                if re.search(r'\breview\b.*(code|design|figma|existing|mab)', summary_lower) or summary_lower.startswith("review "):
+                # Filter out generic noise tasks (Review, Analyze requirements, Payload structure, etc.)
+                if noise_regex.search(sub_lower):
                     continue
 
-                # Clean all leading role prefixes (BE -, WEB -, FE -, WEBAPP -, Mobile -, etc.) completely
-                clean_body = re.sub(r'^((be|web|fe|webapp|mobile)\s*-\s*)+', '', summary_text, flags=re.IGNORECASE).strip()
-
-                # Classify role based on User Specification:
-                # 1. [Mobile Pemrakarsa] / [Mobile Pemutus] -> Frontend
-                # 2. [MCS Pemrakarsa] / [MCS Pemutus] / MCS - -> Backend
-                # 3. General Web UI -> Frontend, General API -> Backend
+                # Clean all leading role prefixes (BE -, WEB -, FE -, WEBAPP -, Mobile -, MSC -, MCS -, etc.) completely
+                clean_body = re.sub(r'^((be|web|fe|webapp|mobile|msc|mcs)\s*-\s*)+', '', summary_text, flags=re.IGNORECASE).strip()
                 clean_body_lower = clean_body.lower()
-                is_pemutus = "pemutus" in summary_lower or "pemutus" in (description or "").lower()
-                role_tag = "[Mobile Pemutus]" if is_pemutus else "[Mobile Pemrakarsa]"
-                mcs_tag = "[MCS Pemutus]" if is_pemutus else "[MCS Pemrakarsa]"
-
+            
                 raw_role = str(sub.get("role", "backend")).lower()
-                if clean_body_lower.startswith("[mobile") or clean_body_lower.startswith("mobile -"):
-                    normalized_role = "frontend"
-                elif clean_body_lower.startswith("[mcs") or clean_body_lower.startswith("mcs -"):
-                    normalized_role = "backend"
-                elif raw_role in ("developer", "backend", "be"):
-                    normalized_role = "backend"
-                elif raw_role in ("frontend", "web", "fe", "mobile"):
-                    normalized_role = "frontend"
-                else:
-                    normalized_role = "frontend" if summary_text.upper().startswith("WEB -") else "backend"
 
-                # --- UI Override: detect tasks with UI keywords that were mislabeled as backend in the DB ---
+                # Robust detection of Backend vs Frontend:
+                # 1. Any task with /v1/, /v2/, create service, endpoint, queue, migration, database -> Backend
+                _is_backend_service = any(kw in clean_body_lower for kw in [
+                    "/v1/", "/v2/", "create new service", "create service",
+                    "queue ", "migrate", "endpoint", "api ", "backend", "db schema",
+                    "migration", "repository", "controller", "stored procedure"
+                ])
+
                 _ui_kw = [
                     "pop up", "popup", "wording", "halaman", "redirect",
                     "button", "tombol", "screen", "layout", "tampilan",
                     "dropdown", "autofill", "checkbox", "radio", "figma",
+                    "camera", "geotagging", "input"
                 ]
                 is_ui_task = any(kw in clean_body_lower for kw in _ui_kw)
-                if is_ui_task:
-                    normalized_role = "frontend"
 
-                # --- Backend override: correct stale/wrong roles saved in the DB ---
-                _backend_kw = [
-                    "migration", "database migration",
-                    "db schema", "tabel database", "kolom database",
-                    "repository", "controller",
-                    "stored procedure", "cekdata", "function general",
-                    "insert into", "select from", "endpoint", "query",
-                ]
-                if normalized_role == "frontend" and not is_ui_task:
-                    if any(kw in clean_body_lower for kw in _backend_kw):
-                        normalized_role = "backend"
+                if clean_body_lower.startswith("[mobile") or clean_body_lower.startswith("mobile -"):
+                    normalized_role = "mobile" if is_mobile_story else "frontend"
+                elif clean_body_lower.startswith("[msc") or clean_body_lower.startswith("msc -") or clean_body_lower.startswith("[mcs") or clean_body_lower.startswith("mcs -"):
+                    normalized_role = "backend"
+                elif _is_backend_service:
+                    normalized_role = "backend"
+                elif is_ui_task:
+                    normalized_role = "mobile" if is_mobile_story else "frontend"
+                elif raw_role in ("developer", "backend", "be"):
+                    normalized_role = "backend"
+                elif raw_role in ("frontend", "web", "fe", "mobile"):
+                    normalized_role = "mobile" if is_mobile_story else "frontend"
+                else:
+                    normalized_role = "frontend" if summary_text.upper().startswith("WEB -") else "backend"
 
                 # Build final summary text:
                 if clean_body.startswith("["):
+                    # Auto-normalize [MCS ...] to [MSC ...]
+                    if clean_body.upper().startswith("[MCS"):
+                        clean_body = re.sub(r'^\[MCS', '[MSC', clean_body, flags=re.IGNORECASE)
                     summary_text = clean_body
                 else:
-                    if normalized_role == "frontend":
-                        if "prakarsa" in summary_lower or "prescreening" in summary_lower or "mikro" in summary_lower:
-                            summary_text = f"{role_tag} {clean_body}"
+                    if normalized_role in ("frontend", "mobile"):
+                        if is_mobile_story:
+                            summary_text = f"{role_tag} {clean_body}" if is_bracket_mobile else f"MOBILE - {clean_body}"
+                            normalized_role = "mobile"
                         else:
                             summary_text = f"WEB - {clean_body}"
                     else:
-                        if "prakarsa" in summary_lower or "prescreening" in summary_lower or "mikro" in summary_lower:
-                            summary_text = f"{mcs_tag} {clean_body}"
+                        if is_mobile_story:
+                            summary_text = f"{msc_tag} {clean_body}" if is_bracket_mobile else f"MSC - {clean_body}"
                         else:
                             summary_text = f"BE - {clean_body}"
 
                 cloned_subtasks.append(
                     Subtask(
-                        summary=summary_text,
+                        summary=self._standardize_subtask_title(summary_text),
                         description="",
                         role=normalized_role,
                         story_points=sub["story_points"],
@@ -349,6 +366,8 @@ class GenerateSubtasksUseCase:
                     db_patterns=db_naming_patterns,
                 )
                 if gap_subtasks:
+                    for g in gap_subtasks:
+                        g.summary = self._standardize_subtask_title(g.summary)
                     cloned_subtasks.extend(gap_subtasks)
 
                 # Mobile subtasks are valid when the story mentions BRISpot mobile roles
@@ -362,6 +381,10 @@ class GenerateSubtasksUseCase:
                 if not has_mobile_ctx:
                     cloned_subtasks = [s for s in cloned_subtasks if s.role != "mobile"]
                 
+                # Standardize all titles before return
+                for s in cloned_subtasks:
+                    s.summary = self._standardize_subtask_title(s.summary)
+
                 return cloned_subtasks
             # All cloned subtasks were filtered as noise — fallback to AI synthesis
             print("   [INFO] Semua subtask dari DB adalah noise, fallback ke AI synthesis...")
@@ -404,15 +427,15 @@ class GenerateSubtasksUseCase:
 
         # Post-process: mobile context guard + general sanitization
         ac_text = (summary + " " + (description or "")).lower()
-
-        # Mobile subtasks are valid when the story mentions BRISpot mobile roles
-        # ('pemrakarsa'/'pemutus') OR mobile/app-related platform terms.
-        # NOTE: 'app' excluded — it's a substring of 'mapping' causing false positives.
+        has_web_or_corp = any(kw in ac_text for kw in ["korporasi", "mab", "web", "portal", "dashboard", "fe ", " fe", "ui", "tab ", "halaman", "browser"])
         mobile_context_keywords = [
-            "pemrakarsa", "pemutus",
-            "mobile", "mobile app", "brispot", "android", "ios", "aplikasi", "mcs", "prescreening"
+            "mobile", "mobile app", "brispot", "android", "ios", "aplikasi mobile", "ots", "prescreening",
+            "mantri", "hanya untuk mobile", "untuk mobile", "camera brispot", "galeri brispot"
         ]
-        has_mobile_context = any(kw in ac_text for kw in mobile_context_keywords) or (bool(assignee_role) and "mob" in assignee_role.lower())
+        has_mobile_context = (any(kw in ac_text for kw in mobile_context_keywords) and not has_web_or_corp) or (bool(assignee_role) and "mob" in assignee_role.lower())
+        is_pemutus = has_mobile_context and "pemutus" in ac_text
+        is_pemrakarsa = has_mobile_context and ("pemrakarsa" in ac_text or "prescreening" in ac_text)
+        is_bracket_mobile = is_pemrakarsa or is_pemutus
 
         filtered_subtasks = []
         for sub in generated_subtasks:
@@ -422,17 +445,157 @@ class GenerateSubtasksUseCase:
             # Drop hallucinated Mobile subtasks when the story has no mobile context and no mobile assignee
             if sub.role == "mobile" and not has_mobile_context:
                 continue
+
+            # In mobile stories, ensure standard prefix formatting based directly on sub.role
+            if has_mobile_context:
+                sub_sum = sub.summary.strip()
+                clean_body = re.sub(r'^((be|web|fe|webapp|mobile|msc|mcs|qa)\s*-\s*)+', '', sub_sum, flags=re.IGNORECASE).strip()
+                clean_body = re.sub(r'^\[(Mobile|WEB|FE|MSC|MCS|BE)[^\]]*\]\s*', '', clean_body, flags=re.IGNORECASE).strip()
+
+                if sub.role == "backend":
+                    if is_pemutus:
+                        sub.summary = f"[MSC Pemutus] {clean_body}"
+                    elif is_pemrakarsa:
+                        sub.summary = f"[MSC Prakarsa] {clean_body}"
+                    else:
+                        sub.summary = f"MSC - {clean_body}"
+                else:
+                    sub.role = "mobile"
+                    if is_pemutus:
+                        sub.summary = f"[Mobile Pemutus] {clean_body}"
+                    elif is_pemrakarsa:
+                        sub.summary = f"[Mobile Pemrakarsa] {clean_body}"
+                    else:
+                        sub.summary = f"MOBILE - {clean_body}"
+
             filtered_subtasks.append(sub)
 
-        return filtered_subtasks if filtered_subtasks else generated_subtasks
+        # Post-process: button consolidation & save progress clarity
+        consolidated = []
+        dl_button_merged = False
+        dl_subtasks = [s for s in filtered_subtasks if "download" in s.summary.lower() and "button" in s.summary.lower()]
+
+        for sub in filtered_subtasks:
+            summary_lower = sub.summary.lower()
+            # 1. Consolidate multiple download button states into ONE unified subtask
+            if sub in dl_subtasks:
+                if not dl_button_merged:
+                    role_prefix = "[Mobile Pemrakarsa] " if sub.summary.startswith("[Mobile") else ("MOBILE - " if sub.summary.startswith("MOBILE") else "WEB - ")
+                    doc_name = "Risalah RKK" if ("rkk" in summary_lower or "risalah" in summary_lower) else ""
+                    title_suffix = f" {doc_name}" if doc_name else ""
+                    new_summary = f"{role_prefix}Create Button Download PDF{title_suffix} with State Validation (Visible & Enabled after Save, Disabled if not saved)".strip()
+                    consolidated.append(Subtask(
+                        summary=new_summary,
+                        description=sub.description,
+                        role=sub.role,
+                        story_points=sub.story_points
+                    ))
+                    dl_button_merged = True
+                continue
+            # 2. Enhance save progress button clarity
+            elif ("button simpan" in summary_lower or "save button" in summary_lower) and "progress" not in summary_lower:
+                role_prefix = "WEB - " if sub.summary.startswith("WEB - ") else ("[Mobile Pemrakarsa] " if sub.summary.startswith("[Mobile") else "")
+                doc_name = "Risalah RKK" if ("rkk" in summary_lower or "risalah" in summary_lower) else ""
+                title_suffix = f" {doc_name}" if doc_name else ""
+                new_summary = f"{role_prefix}Create Button Simpan for Save Progress{title_suffix}".strip()
+                consolidated.append(Subtask(
+                    summary=new_summary,
+                    description=sub.description,
+                    role=sub.role,
+                    story_points=sub.story_points
+                ))
+            else:
+                consolidated.append(sub)
+
+        final_list = consolidated if consolidated else (filtered_subtasks if filtered_subtasks else generated_subtasks)
+        for s in final_list:
+            s.summary = self._standardize_subtask_title(s.summary)
+        return final_list
+
+    @staticmethod
+    def _standardize_subtask_title(summary: str) -> str:
+        """Standardizes subtask title casing, spelling, grammar, and prefixes."""
+        s = str(summary or '').strip()
+
+        # 1. Extract prefix
+        prefix_match = re.match(r'^((?:\[(?:Mobile|WEB|FE|MSC|MCS|BE)[^\]]*\]|(?:BE|WEB|FE|WEBAPP|MOBILE|MSC|MCS))\s*-\s*)', s, re.IGNORECASE)
+        prefix = ""
+        body = s
+        if prefix_match:
+            prefix = prefix_match.group(1).strip()
+            body = s[len(prefix_match.group(1)):].strip()
+        elif s.startswith("["):
+            bracket_match = re.match(r'^(\[[^\]]+\])\s*', s)
+            if bracket_match:
+                prefix = bracket_match.group(1).strip()
+                body = s[len(bracket_match.group(0)):].strip()
+
+        # Standardize prefix formatting
+        if prefix:
+            if prefix.upper().startswith("WEB -") or prefix.upper().startswith("FE -"):
+                prefix = "WEB -"
+            elif prefix.upper().startswith("BE -"):
+                prefix = "BE -"
+            elif prefix.upper().startswith("MSC -") or prefix.upper().startswith("MCS -"):
+                prefix = "MSC -"
+            elif prefix.upper().startswith("MOBILE -"):
+                prefix = "MOBILE -"
+            elif prefix.upper().startswith("[MSC"):
+                prefix = re.sub(r'^\[MCS', '[MSC', prefix, flags=re.IGNORECASE)
+
+        # 2. Fix common dataset typos (including within camelCase identifiers like inquirtLimit -> inquiryLimit)
+        body = re.sub(r'inquirt', 'inquiry', body, flags=re.IGNORECASE)
+        body = re.sub(r'\bIMplement\b', 'Implement', body)
+        body = re.sub(r'\bimplement\b', 'Implement', body)
+        body = re.sub(r'\bcreating\b', 'Create', body, flags=re.IGNORECASE)
+        body = re.sub(r'\bcreate\b', 'Create', body, flags=re.IGNORECASE)
+        body = re.sub(r'\bhandling\b', 'Handle', body, flags=re.IGNORECASE)
+        body = re.sub(r'\bhandle\b', 'Handle', body, flags=re.IGNORECASE)
+        body = re.sub(r'\bmapping data\b', 'Mapping Data', body, flags=re.IGNORECASE)
+        body = re.sub(r'\bmapping\b', 'Mapping Data', body, flags=re.IGNORECASE)
+        body = re.sub(r'\bendpoint\s*/', 'Endpoint /', body, flags=re.IGNORECASE)
+        body = re.sub(r'\bendpoint\b', 'Endpoint', body, flags=re.IGNORECASE)
+        body = re.sub(r'\bservice\b', 'Service', body, flags=re.IGNORECASE)
+        body = re.sub(r'\bcomponent\b', 'Component', body, flags=re.IGNORECASE)
+        body = re.sub(r'\badd\b', 'Add', body, flags=re.IGNORECASE)
+        body = re.sub(r'\benhance\b', 'Enhance', body, flags=re.IGNORECASE)
+        body = re.sub(r'\bperhitungan\b', 'Perhitungan', body, flags=re.IGNORECASE)
+        body = re.sub(r'\bidentification\b', 'Identification', body, flags=re.IGNORECASE)
+        body = re.sub(r'\blogic\b', 'Logic', body, flags=re.IGNORECASE)
+
+        # Specific database SOP pattern
+        if "sop database" in body.lower() and "column" in body.lower():
+            tbl_match = re.search(r'database\s+([a-zA-Z0-9_]+)', body, re.IGNORECASE)
+            col_match = re.search(r'column\s+([a-zA-Z0-9_]+)', body, re.IGNORECASE)
+            tbl_name = tbl_match.group(1) if tbl_match else "mst_nore_fasilitas"
+            col_name = col_match.group(1) if col_match else "tanggal_akad"
+            body = f"Add Column {col_name} to Database Table {tbl_name}"
+
+        # Specific 'Implement tipe perusahaan identification logic'
+        if "tipe perusahaan" in body.lower() and "identification" in body.lower():
+            body = "Implement Tipe Perusahaan Identification Logic"
+
+        if body.lower() == "add tanggal akad dan jangka waktu":
+            body = "Add Field Tanggal Akad dan Jangka Waktu"
+
+        body = re.sub(r'^Create component\b', 'Create Component', body, flags=re.IGNORECASE)
+        body = re.sub(r'^Create endpoint\b', 'Create Endpoint', body, flags=re.IGNORECASE)
+        body = re.sub(r'^Create service\b', 'Create Service', body, flags=re.IGNORECASE)
+        body = re.sub(r'^Mapping Data Data\b', 'Mapping Data', body, flags=re.IGNORECASE)
+        body = re.sub(r'\s+', ' ', body).strip()
+
+        if prefix:
+            return f"{prefix} {body}".strip()
+        return body
 
     def _extract_naming_patterns(self, stories: list) -> dict:
         """Extract real naming patterns from historical subtasks to use as dynamic style guide."""
         be_patterns = set()
         web_patterns = set()
+        mobile_patterns = set()
 
         noise_pattern = re.compile(
-            r'\b(review|ensure|handle|verify|validate|check that|make sure)\b',
+            r'\b(review|ensure|handle|verify|validate|check that|make sure|analyze requirements|payload structure|request validation)\b',
             re.IGNORECASE
         )
 
@@ -445,12 +608,15 @@ class GenerateSubtasksUseCase:
                 # Extract first 6 words as the pattern template
                 words = title.split()
                 pattern = " ".join(words[:6]) if len(words) >= 3 else title
-                if title_lower.startswith("be -") or title_lower.startswith("be -"):
+                if title_lower.startswith("be -") or title_lower.startswith("msc -") or title_lower.startswith("[msc"):
                     be_patterns.add(pattern)
                 elif title_lower.startswith("web -") or title_lower.startswith("fe -"):
                     web_patterns.add(re.sub(r'^fe\s*-', 'WEB -', pattern, flags=re.IGNORECASE))
+                elif title_lower.startswith("mobile -") or title_lower.startswith("[mobile"):
+                    mobile_patterns.add(pattern)
 
         return {
             "be": sorted(be_patterns)[:8],
             "web": sorted(web_patterns)[:8],
+            "mobile": sorted(mobile_patterns)[:8],
         }

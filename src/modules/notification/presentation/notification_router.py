@@ -17,13 +17,55 @@ send_reminder_uc = SendSprintReminderUseCase(jira_client, telegram_client)
 
 
 class SprintReminderRequest(BaseModel):
-    epic_key: str = Field(default="JT", example="JT")
-    sprint_name: Optional[str] = Field(default="Active Sprint", example="Korp 2 - Sprint 3")
-    days_remaining: Optional[int] = Field(default=2, example=2)
+    epic_key: str = Field(default="JT", example="BL", description="Project Key, Epic Key, or Filter ID")
+    sprint_name: Optional[str] = Field(default="Active Sprint", example="Sprint 9572")
+    days_remaining: Optional[int] = Field(default=2, example=2, description="Days remaining in sprint")
 
 
 class CustomTelegramMessageRequest(BaseModel):
-    message: str = Field(..., example="<b>PERHATIAN:</b> Rapat Daily Standup 10 menit lagi!")
+    message: str = Field(
+        default="<b>Notification Test</b>",
+        example="<b>System Status:</b> All services operational.",
+        description="HTML formatted Telegram message text"
+    )
+
+
+class CriticalAlertTestRequest(BaseModel):
+    target_info: str = Field(
+        default="26953",
+        example="26953",
+        description="Dashboard ID, Filter ID, Project Key, or JQL query"
+    )
+    days_remaining: int = Field(
+        default=3,
+        example=3,
+        description="3 for H-3 Critical Alert, 5 for H-5 Warning, 0 for Due Today, -1 for Overdue"
+    )
+    sprint_name: Optional[str] = Field(default="Squad Korporasi - Critical Test Sprint", example="Korporasi 1 - Active Sprint")
+
+
+@router.post("/testCriticalAlert")
+def test_critical_alert_notification(req: CriticalAlertTestRequest) -> Dict[str, Any]:
+    """
+    Directly tests sending a Critical (H-3/H-5/Overdue) Telegram alert with live Jira data.
+    """
+    try:
+        sent = send_reminder_uc.execute(
+            project_or_epic=req.target_info,
+            days_remaining=req.days_remaining,
+            sprint_name=req.sprint_name,
+        )
+        return {
+            "status": "success",
+            "message": f"Critical notification (H-{req.days_remaining}) successfully sent to Telegram!",
+            "telegram_sent": sent,
+            "target": req.target_info,
+            "days_remaining": req.days_remaining,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to send Critical Telegram Alert: {str(e)}"
+        )
 
 
 @router.post("/sprintReminder")

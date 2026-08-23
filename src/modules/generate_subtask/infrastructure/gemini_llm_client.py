@@ -56,31 +56,27 @@ class GeminiLlmClient(ILlmClient):
         if not settings.GEMINI_API_KEY:
             raise ValueError("GEMINI_API_KEY is not configured.")
 
-        # Strict AC Vocabulary prompt for BRI Scrum Master subtask decomposition
         prompt = (
-            "Role: BRI Scrum Master. Decompose User Story into subtasks strictly using AC terms.\n\n"
+            "Role: BRI Scrum Master. Decompose User Story into granular subtasks strictly matching AC and RAG dataset patterns.\n\n"
             "RULES:\n"
-            "1. Prefix: 'BE -', 'WEB -', 'MOBILE -', or 'MCS -'\n"
-            "   - 'MOBILE - <Title>': Mobile Frontend Application (Android/iOS screens, layouts, activities, prescreening/pemrakarsa UI).\n"
-            "   - 'MCS - <Title>': Mobile Channel Service (Mobile Backend API / service middleware khusus mobile).\n"
-            "2. Mobile & MCS Tasks: If AC or To-Do explicitly mentions mobile tasks (e.g. Mobile UI, Android, iOS, or Pemrakarsa/Pemutus on Mobile), generate subtasks for role 'mobile' with prefix 'MOBILE - <Title>'. If AC/To-Do mentions mobile API or backend channel service for mobile, generate subtasks with prefix 'MCS - <Title>'.\n"
-            "3. Task Titles: Use exact AC wording for subtasks. If AC mentions 'Modul' or 'Komponen', output 'WEB - Create Component <name>'. If AC specifies 'Enhance...', output 'WEB - Enhance...'. If AC specifies 'Nambah/Add/Create...', output 'WEB - Create...'. If explicit 'To do list' or backend endpoints are provided in AC, use those exact items for BE/MCS subtasks.\n"
-            "4. ROLE SEPARATION: NEVER merge Frontend (WEB/MOBILE) and Backend (BE/MCS) into one subtask.\n"
-            "5. CONSOLIDATION: Group by LOGICAL section/component/modal/page within the SAME role. Merge sibling items that share the same action verb and component type into ONE subtask using 'and' or '/'.\n"
-            "6. Banned words: Ensure/Handle/Verify/Validate/Make sure/Check that/schema/Review code\n"
-            "7. PRESERVE DOMAIN TERMS: Do NOT translate Indonesian business/domain terms to English. Keep words like 'debitur', 'prakarsa', 'pemrakarsa', 'pemutus', 'pencairan', 'korporasi', 'perubahan syarat', 'pengajuan', 'fasilitas', 'termin', 'rekening' exactly as written in the AC.\n"
-            "8. SP: Fibonacci only (0, 0.5, 1, 2, 3, 5, 8, 13)\n\n"
+            "1. STRICT AC GROUNDING & ROLE ASSIGNMENT:\n"
+            "   - Assign role 'frontend' (or 'mobile' for mobile context) for UI screens, layouts, input fields, cascading dropdowns, camera/gallery UI, and form validations.\n"
+            "   - Assign role 'backend' for database storage/tables, APIs, microservices, external service integrations (e.g. FDS, external core), and data sync/offline persistence services.\n"
+            "   - NEVER invent unmentioned features/endpoints (use 'Create API Endpoint' ONLY if 'endpoint/API' is explicitly in AC; use 'Save <Data> to <Table>' for database storage).\n"
+            "2. NAMING: English technical verbs ('Create Layout', 'Create Input Field', 'Create Dropdown', 'Create Button <Name>', 'Save <Data> to <Table>') + preserve Indonesian domain terms ('Risalah RKK', 'KUBL', 'Debitur', 'Pencairan', 'MAB', etc.).\n"
+            "3. CONSOLIDATION: Sibling fields in the same section may merge with 'and'/'/'. Merge button states (visible/disabled) into ONE single task with state validation.\n\n"
+            'Output JSON (Clean titles without role prefix; role is "frontend", "backend", or "mobile"):\n'
+            '{"subtasks":[{"summary":"Create Layout for Risalah RKK","role":"frontend","story_points":1.0},{"summary":"Save KUBL Data to content_data_kbli","role":"backend","story_points":1.0}]}\n\n'
         )
 
         # --- Detect Mobile app context from summary + description ---
-        # Determines whether subtasks should use [Mobile Pemrakarsa] or [Mobile Pemutus] prefix.
-        # This matches the naming convention observed in the RAG database (rag_store.db):
-        #   - Stories about 'pemrakarsa' / 'prakarsa' flow → [Mobile Pemrakarsa] prefix
-        #   - Stories about 'pemutus' / 'putusan' flow   → [Mobile Pemutus] prefix
-        # Mobile context requires explicit mobile app keywords (mobile, brispot, android, ios)
-        # Business terms like 'prakarsa', 'pemrakarsa', 'pemutus' alone do NOT imply mobile as they exist on Web too.
+        combined_text = f"{summary}\n{description}".lower()
         has_mobile_keyword = any(
-            kw in combined_text for kw in ["mobile", "brispot", "aplikasi mobile", "mobile app", "app mobile", "brispot app", "android", "ios"]
+            kw in combined_text for kw in [
+                "mobile", "brispot", "aplikasi mobile", "mobile app", "app mobile",
+                "brispot app", "android", "ios", "mantri", "hanya untuk mobile",
+                "untuk mobile", "camera brispot", "galeri brispot"
+            ]
         )
 
         is_mobile_pemrakarsa = has_mobile_keyword and (
@@ -93,6 +89,7 @@ class GeminiLlmClient(ILlmClient):
             or "putusan kredit" in combined_text
             or "rekomendasi kredit" in combined_text
         )
+        is_general_mobile = has_mobile_keyword and not (is_mobile_pemrakarsa or is_mobile_pemutus)
 
         # Inject specific Mobile prefix instruction into prompt so AI names subtasks correctly
         # NOTE: Pemrakarsa/Pemutus prefix normalization is handled entirely by post-processing code below.
@@ -100,13 +97,14 @@ class GeminiLlmClient(ILlmClient):
 
 
         # Inject real naming patterns from DB
-        if db_patterns and (db_patterns.get("be") or db_patterns.get("web")):
+        if db_patterns and (db_patterns.get("be") or db_patterns.get("web") or db_patterns.get("mobile")):
             be_p = " | ".join(db_patterns["be"]) if db_patterns.get("be") else ""
             web_p = " | ".join(db_patterns["web"]) if db_patterns.get("web") else ""
-            prompt += f"PATTERNS: BE: {be_p} | WEB: {web_p}\n\n"
+            mob_p = " | ".join(db_patterns["mobile"]) if db_patterns.get("mobile") else ""
+            prompt += f"PATTERNS FROM RAG DB: BE: {be_p} | WEB: {web_p}" + (f" | MOBILE: {mob_p}" if mob_p else "") + "\n\n"
 
         if examples:
-            prompt += "EXAMPLES:\n"
+            prompt += "EXAMPLES FROM RAG DB:\n"
             for eg in examples:
                 subs = ", ".join(f"{s['summary']}" for s in eg["subtasks"])
                 prompt += f"[{eg['summary']}] -> {subs}\n"
@@ -144,6 +142,7 @@ class GeminiLlmClient(ILlmClient):
                     headers = {"Content-Type": "application/json"}
                     gen_config = {
                         "temperature": 0.0,
+                        "seed": 42,
                         "maxOutputTokens": 1500,
                         "responseMimeType": "application/json"
                     }
@@ -228,42 +227,40 @@ class GeminiLlmClient(ILlmClient):
                 summary_text = re.sub(r'\s*\([MBFmbf]\)$', '', summary_text).strip()
                 role_key = str(sub.get("role", "backend")).lower().strip()
 
-                # Filter out generic noise tasks (Review Existing Code, Review Design Figma, etc.)
+                # Drop QA/Testing and SDLC boilerplate noise in code
                 summary_lower = summary_text.lower()
-                if re.search(r'\breview\b.*(code|design|figma|existing|mab)', summary_lower) or summary_lower.startswith("review "):
+                if role_key in ("qa", "tester", "testing") or re.search(r'(\bqa\b|\btesting\b|\buat\b|\banalyze requirements\b|\bpayload structure\b|\brequest validation\b|\bmap request payload\b|\bcode review\b|\bdesign review\b|^\s*review\s+)', summary_lower):
                     continue
 
                 # --- Pemrakarsa / Pemutus context: special prefix rules ---
                 # In this mobile app context:
                 #   - 'frontend' / WEB subtasks are NOT needed — skip them entirely
-                #   - 'backend' subtasks get [MCS Prakarsa] or [MCS Pemutus] prefix
+                #   - 'backend' subtasks get [MSC Prakarsa] or [MSC Pemutus] prefix
                 #   - 'mobile' subtasks get [Mobile Pemrakarsa] or [Mobile Pemutus] prefix
                 is_mobile_context = is_mobile_pemrakarsa or is_mobile_pemutus
-                mcs_label = "Prakarsa" if (is_mobile_pemrakarsa and not is_mobile_pemutus) else "Pemutus"
+                msc_label = "Prakarsa" if (is_mobile_pemrakarsa and not is_mobile_pemutus) else "Pemutus"
 
                 if is_mobile_context:
-                    # Skip WEB/frontend subtasks entirely in this context
-                    if role_key == "frontend":
-                        continue
-
                     if role_key == "backend":
-                        # Strip any existing [MCS ...] bracket prefix first
-                        summary_text = re.sub(r'^\[MCS[^\]]*\]\s*', '', summary_text, flags=re.IGNORECASE).strip()
-                        # Strip any unbracketed prefix with or without dash: BE -, MCS Prakarsa -, MCS Pemutus, etc.
-                        summary_text = re.sub(r'^(BE|MCS(\s+Prakarsa|\s+Pemutus)?)\s*(-|\s+)?', '', summary_text, flags=re.IGNORECASE).strip()
-                        # Apply correct [MCS Prakarsa] or [MCS Pemutus] prefix
-                        summary_text = f"[MCS {mcs_label}] {summary_text}"
+                        clean = re.sub(r'^\[(MSC|MCS|BE)[^\]]*\]\s*', '', summary_text, flags=re.IGNORECASE).strip()
+                        clean = re.sub(r'^(BE|(MSC|MCS)(\s+Prakarsa|\s+Pemutus)?)\s*(-|\s+)?', '', clean, flags=re.IGNORECASE).strip()
+                        summary_text = f"[MSC {msc_label}] {clean}"
+                    else:
+                        role_key = "mobile"
+                        clean = re.sub(r'^\[(Mobile|WEB|FE)[^\]]*\]\s*', '', summary_text, flags=re.IGNORECASE).strip()
+                        clean = re.sub(r'^(Mobile|WEB|FE)(\s+Pemrakarsa|\s+Pemutus)?\s*(-|\s+)?', '', clean, flags=re.IGNORECASE).strip()
+                        summary_text = f"[Mobile {msc_label}] {clean}"
 
-                    elif role_key == "mobile":
-                        # Strip any existing [Mobile ...] bracket prefix first
-                        summary_text = re.sub(r'^\[Mobile[^\]]*\]\s*', '', summary_text, flags=re.IGNORECASE).strip()
-                        # Strip any unbracketed prefix with or without dash: Mobile Pemrakarsa -, Mobile Pemrakarsa, Mobile -, etc.
-                        summary_text = re.sub(r'^Mobile(\s+Pemrakarsa|\s+Pemutus)?\s*(-|\s+)?', '', summary_text, flags=re.IGNORECASE).strip()
-                        # Apply the contextually correct bracketed prefix
-                        if is_mobile_pemrakarsa and not is_mobile_pemutus:
-                            summary_text = f"[Mobile Pemrakarsa] {summary_text}"
-                        else:
-                            summary_text = f"[Mobile Pemutus] {summary_text}"
+                elif is_general_mobile:
+                    if role_key == "backend":
+                        clean = re.sub(r'^\[(MSC|MCS|BE)[^\]]*\]\s*', '', summary_text, flags=re.IGNORECASE).strip()
+                        clean = re.sub(r'^(BE|MSC|MCS)\s*-\s*', '', clean, flags=re.IGNORECASE).strip()
+                        summary_text = f"MSC - {clean}"
+                    else:
+                        role_key = "mobile"
+                        clean = re.sub(r'^\[(Mobile|WEB|FE)[^\]]*\]\s*', '', summary_text, flags=re.IGNORECASE).strip()
+                        clean = re.sub(r'^(Mobile|WEB|FE)\s*-\s*', '', clean, flags=re.IGNORECASE).strip()
+                        summary_text = f"MOBILE - {clean}"
 
                 else:
                     # --- Standard (non-mobile-context) prefix normalization ---
@@ -284,7 +281,7 @@ class GeminiLlmClient(ILlmClient):
                         summary_text.lower().startswith(p) or p in summary_text.lower()
                         for p in ["be -", "fe -", "qa -", "mobile", "[mobile", "app", "prescreening app",
                                   "pemrakarsa", "pemutus", "web -", "wlb -", "[web", "service -",
-                                  "[mcs", "[las", "risk register", "risk management",
+                                  "[msc", "[mcs", "[las", "risk register", "risk management",
                                   "security review", "code review", "review", "audit", "compliance"]
                     )
 
@@ -335,6 +332,7 @@ class GeminiLlmClient(ILlmClient):
                 headers = {"Content-Type": "application/json"}
                 gen_config = {
                     "temperature": 0.0,
+                    "seed": 42,
                     "maxOutputTokens": 800,
                     "responseMimeType": "application/json",
                 }
@@ -367,6 +365,22 @@ class GeminiLlmClient(ILlmClient):
         # Parse JSON response into Subtask objects
         parsed = json.loads(text_content)
         subtasks = []
+        combined_context = f"{summary}\n{user_content}".lower()
+        has_mobile_kw = any(
+            kw in combined_context
+            for kw in [
+                "mobile", "brispot", "android", "ios", "mantri", "aplikasi mobile", "mobile app",
+                "hanya untuk mobile", "untuk mobile", "camera brispot", "galeri brispot",
+                "pemrakarsa", "pemutus", "prescreening", "prakarsa"
+            ]
+        )
+        is_pemutus = "pemutus" in combined_context
+        is_pemrakarsa = "pemrakarsa" in combined_context or "prakarsa" in combined_context or "prescreening" in combined_context
+        is_bracket_mobile = is_pemrakarsa or is_pemutus
+
+        mobile_tag = "[Mobile Pemutus]" if is_pemutus else "[Mobile Pemrakarsa]"
+        msc_tag = "[MSC Pemutus]" if is_pemutus else "[MSC Prakarsa]"
+
         for sub in parsed.get("subtasks", []):
             summary_text = sub.get("summary", "").strip()
             # Clean Jira markup symbols ({*}, {*}, *}, and single asterisks *) from title
@@ -374,23 +388,59 @@ class GeminiLlmClient(ILlmClient):
             role_val = str(sub.get("role", "backend")).lower()
             raw_sp = sub.get("story_points", 1.0)
 
-            # Clean all leading role prefixes (BE -, WEB -, FE -, WEBAPP -, Mobile -, etc.) completely
-            clean_body = re.sub(r'^((be|web|fe|webapp|mobile)\s*-\s*)+', '', summary_text, flags=re.IGNORECASE).strip()
-            prefix = "WEB - " if ("frontend" in role_val or "web" in role_val) else "Mobile - " if "mobile" in role_val else "BE - "
-            summary_text = f"{prefix}{clean_body}"
+            # Strip all leading role prefixes (BE -, WEB -, FE -, WEBAPP -, Mobile -, MSC -, MCS -, etc.)
+            clean_body = re.sub(r'^((be|web|fe|webapp|mobile|msc|mcs|qa)\s*-\s*)+', '', summary_text, flags=re.IGNORECASE).strip()
+            clean_body_lower = clean_body.lower()
 
-            role_key = (
-                "frontend" if ("frontend" in role_val or "web" in role_val)
-                else "mobile" if "mobile" in role_val
-                else "backend"
-            )
+            # Auto-standardize [MCS ...] to [MSC ...]
+            if clean_body.upper().startswith("[MCS"):
+                clean_body = re.sub(r'^\[MCS', '[MSC', clean_body, flags=re.IGNORECASE)
+                clean_body_lower = clean_body.lower()
+
+            _is_backend_service = any(kw in clean_body_lower for kw in [
+                "/v1/", "/v2/", "create new service", "create service",
+                "queue ", "migrate", "endpoint", "api ", "backend", "db schema",
+                "migration", "repository", "controller", "stored procedure"
+            ])
+
+            if clean_body.startswith("["):
+                if clean_body_lower.startswith("[msc") or clean_body_lower.startswith("[mcs") or _is_backend_service:
+                    role_key = "backend"
+                elif clean_body_lower.startswith("[mobile"):
+                    role_key = "mobile"
+                else:
+                    role_key = "backend" if _is_backend_service else "mobile"
+                final_summary = clean_body
+            else:
+                if "frontend" in role_val or "web" in role_val or "fe" == role_val or any(kw in clean_body_lower for kw in ["pop up", "popup", "wording", "halaman", "button", "tombol", "screen", "layout", "figma", "camera", "geotagging", "input"]):
+                    if has_mobile_kw:
+                        role_key = "mobile"
+                        final_summary = f"{mobile_tag} {clean_body}" if is_bracket_mobile else f"MOBILE - {clean_body}"
+                    else:
+                        role_key = "frontend"
+                        final_summary = f"WEB - {clean_body}"
+                elif "mobile" in role_val:
+                    if any(kw in clean_body_lower for kw in ["service", "api", "endpoint", "channel", "backend", "inquiry", "integrasi"]):
+                        role_key = "backend"
+                        final_summary = f"{msc_tag} {clean_body}" if is_bracket_mobile else f"MSC - {clean_body}"
+                    else:
+                        role_key = "mobile"
+                        final_summary = f"{mobile_tag} {clean_body}" if is_bracket_mobile else f"MOBILE - {clean_body}"
+                elif "qa" in role_val or "tester" in role_val:
+                    continue
+                else:
+                    role_key = "backend"
+                    if has_mobile_kw:
+                        final_summary = f"{msc_tag} {clean_body}" if is_bracket_mobile else f"MSC - {clean_body}"
+                    else:
+                        final_summary = f"BE - {clean_body}"
 
             # Fibonacci SP
             fib = [0, 0.5, 1, 2, 3, 5, 8, 13]
             sp = min(fib, key=lambda x: abs(x - float(raw_sp)))
 
             subtasks.append(Subtask(
-                summary=summary_text,
+                summary=final_summary,
                 description="",
                 role=role_key,
                 story_points=sp,

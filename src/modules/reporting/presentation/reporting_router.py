@@ -46,27 +46,37 @@ def _normalize_subtask_role(summary: str, assignee: str, default_role: str = "Ba
     summary_lower = str(summary or "").lower()
     assignee_lower = str(assignee or "").lower()
 
+    # 1. EXPLICIT PREFIX CHECK MUST ALWAYS TAKE PRECEDENCE OVER KEYWORDS IN TITLE!
+    if re.search(r"^(?:\[\s*fe\s*\]|\[\s*frontend\s*\]|\[\s*web\s*\]|fe\s*[-:]|web\s*[-:]|frontend\s*[-:])", summary_lower):
+        return "Frontend"
+    if re.search(r"^(?:\[\s*be\s*\]|\[\s*backend\s*\]|\[\s*job\s*\]|\[\s*las\s*\]|be\s*[-:]|backend\s*[-:]|api\s*[-:])", summary_lower):
+        return "Backend"
+    if re.search(r"^(?:\[\s*mobile\s*\]|\[\s*android\s*\]|\[\s*ios\s*\]|mobile\s*[-:]|android\s*[-:]|ios\s*[-:])", summary_lower):
+        return "Mobile"
+    if re.search(r"^(?:\[\s*sad\s*\]|sad\s*[-:]|system design\s*[-:]|dokumen\s*[-:])", summary_lower):
+        return "SAD"
+
+    # 2. Check assignee specific SAD roles
     if "fridolin" in assignee_lower or "adenito" in assignee_lower:
         return "SAD"
 
+    # 3. Specific SAD keyword check (only when no explicit FE/BE/Mobile prefix)
     sad_pattern = (
         r"\b(system design|design system|dokumen utama|product backlog|iad|bmc|sprint plan|"
         r"service dependency|security review|summary design|risk register|risk management|"
-        r"user manual|user sign-off|architecture|sad|it control checklist|sprint retrospective|"
-        r"dokumen pengembangan)\b"
+        r"user manual|user sign-off|architecture|it control checklist|sprint retrospective|"
+        r"dokumen pengembangan|fsd|brd)\b"
     )
     if re.search(sad_pattern, summary_lower):
         return "SAD"
 
-    if re.search(r"^(?:\[\s*fe\s*\]|\[\s*frontend\s*\]|\[\s*web\s*\]|fe\s*[-:]|web\s*[-:]|frontend\s*[-:])", summary_lower):
-        return "Frontend"
+    # 4. Keyword checks for Frontend, Mobile, Backend
     if re.search(r"\b(frontend|react|vue|angular|css|html|layout|modal|navbar|sidebar|screen|figma|ui/ux|view|page|halaman|tampilan)\b", summary_lower):
         return "Frontend"
-
-    if re.search(r"^(?:\[\s*mobile\s*\]|\[\s*android\s*\]|\[\s*ios\s*\]|mobile\s*[-:]|android\s*[-:]|ios\s*[-:])", summary_lower):
+    if re.search(r"\b(mobile|android|ios|apk|flutter|react native|msc|mcs)\b", summary_lower):
         return "Mobile"
-    if re.search(r"\b(mobile|android|ios|apk|flutter|react native|mcs)\b", summary_lower):
-        return "Mobile"
+    if re.search(r"\b(backend|api|endpoint|database|query|service|controller|model|repository|cron|job|kafka|redis|sql|table)\b", summary_lower):
+        return "Backend"
 
     return default_role or "Backend"
 
@@ -209,7 +219,7 @@ def export_excel_report(req: ExportExcelRequest):
     with native Bar & Pie Charts, KPI cards, Segoe UI theme, and clickable Jira links.
     """
     try:
-        safe_key = "".join([c for c in req.root_key if c.isalnum() or c in ("-", "_")]).strip() or "Report"
+        safe_key = ExcelReporter._get_professional_filename(req.root_key, {"root_summary": req.root_summary})
 
         # 1. Process data from Jira Web UI / Forge
         if req.detailed_subtasks or req.stories:

@@ -115,106 +115,112 @@ class SendSprintReminderUseCase:
             pending_tasks = total_tasks - done_tasks
             pct_done = round((done_tasks / total_tasks * 100), 1) if total_tasks > 0 else 0.0
 
-        # 4. Format Sisa Waktu string
-        if real_days_remaining > 0:
-            due_info = f" (Due: {due_date_str})" if due_date_str else ""
-            time_display = f"Sisa Waktu: <b>{real_days_remaining} Hari Kerja</b>{due_info}"
+        # 4. Determine Smart Urgency Tier & Format Time/Header Strings
+        due_info = f" (Due: {due_date_str})" if due_date_str else ""
+        if real_days_remaining < 0:
+            header_title = "❌ <b>SPRINT OVERDUE REPORT</b>"
+            time_display = f"Status Waktu: ❌ <b>Overdue {abs(real_days_remaining)} Hari</b>{due_info}"
+            pending_suffix = " ❌ <i>(Overdue!)</i>"
+            footer_note = "<i>❌ PERHATIAN: Sprint ini telah melewati batas waktu (Overdue). Mohon tim segera menyelesaikan sisa subtask pending!</i>"
         elif real_days_remaining == 0:
-            time_display = "Sisa Waktu: <b>Hari Ini Terakhir (Due Today)</b>"
+            header_title = "🔥 <b>FINAL DAY ALERT: SPRINT DUE TODAY</b>"
+            time_display = "Status Waktu: 🔥 <b>Hari Ini Terakhir (Due Today)!</b>"
+            pending_suffix = " 🔥 <i>(Hari Terakhir!)</i>"
+            footer_note = "<i>🔥 URGENT: Hari ini adalah hari terakhir sprint. Pastikan seluruh pekerjaan yang selesai segera di-update ke status Done di Jira!</i>"
+        elif 1 <= real_days_remaining <= 3:
+            header_title = f"🚨 <b>CRITICAL SPRINT ALERT (H-{real_days_remaining})</b>"
+            time_display = f"Status Waktu: 🚨 <b>Sisa {real_days_remaining} Hari Kerja Lagi!</b>{due_info}"
+            pending_suffix = f" 🚨 <i>(Kritis - Sisa H-{real_days_remaining})</i>"
+            footer_note = f"<i>🚨 CRITICAL: Sprint deadline tersisa {real_days_remaining} hari kerja lagi. Mohon seluruh developer segera menindaklanjuti dan menyelesaikan blocker sebelum sprint berakhir!</i>"
+        elif 4 <= real_days_remaining <= 5:
+            header_title = f"⚠️ <b>SPRINT PROGRESS WARNING (H-{real_days_remaining})</b>"
+            time_display = f"Status Waktu: ⚠️ <b>Sisa {real_days_remaining} Hari Kerja</b>{due_info}"
+            pending_suffix = f" ⚠️ <i>(Sisa H-{real_days_remaining})</i>"
+            footer_note = f"<i>⚠️ PERHATIAN: Sprint deadline tersisa {real_days_remaining} hari kerja. Mohon tim mulai memprioritaskan penyelesaian subtask pending.</i>"
         else:
-            time_display = f"Status Waktu: <b>Overdue {abs(real_days_remaining)} Hari</b>"
+            header_title = "<b>SPRINT PROGRESS REPORT</b>"
+            time_display = f"Sisa Waktu: <b>{real_days_remaining} Hari Kerja</b>{due_info}"
+            pending_suffix = ""
+            footer_note = "<i>Mohon tim menindaklanjuti tugas pending sebelum akhir sprint.</i>"
 
         # 5. Construct Clean, Professional HTML Message
+        pending_display = f"{pending_tasks}{pending_suffix}" if pending_tasks > 0 else "0"
         message = (
-            f"<b>SPRINT PROGRESS REPORT</b>\n"
+            f"{header_title}\n"
             f"Target: <b>{epic_key}</b> | {real_sprint_name}\n"
             f"{time_display}\n\n"
             f"<b>Ringkasan Sprint:</b>\n"
             f"- Total Subtask : {total_tasks}\n"
             f"- Selesai (Done): {done_tasks} ({pct_done}%)\n"
-            f"- Pending       : {pending_tasks}\n\n"
+            f"- Pending       : {pending_display}\n\n"
         )
 
         if pending_tasks > 0:
-            message += "<b>Rincian Tugas Pending:</b>\n\n"
+            message += "<b>Rincian Progres per Epic & Story:</b>\n\n"
 
-            # 1. Structure tasks: role -> developer -> parent_story -> list of subtasks
-            role_order = ["SAD", "Frontend", "Backend", "Mobile", "QA", "General", "Unassigned"]
-            grouped_by_role = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+            # Structure tasks: Group by Epic -> Story -> List of subtasks
+            tree = defaultdict(lambda: defaultdict(list))
+            all_pending = []
 
-            for assignee, tasks in member_pending.items():
-                clean_name = assignee.strip().upper()
-                tag = emp_tag_map.get(clean_name, "")
-                emp_role = emp_role_map.get(clean_name, "")
+            if report_data and report_data.get("detailed_subtasks"):
+                for sub in report_data.get("detailed_subtasks", []):
+                    if sub.get("status_category") != "Done":
+                        all_pending.append(sub)
+            else:
+                for assignee, tasks in member_pending.items():
+                    all_pending.extend(tasks)
 
-                for t in tasks:
-                    sub_role = str(t.get("role") or "").strip().title()
-                    if not sub_role or sub_role == "-":
-                        sub_role = emp_role.title() if emp_role else "General"
-                    if assignee.lower() == "unassigned":
-                        sub_role = "Unassigned"
+            for t in all_pending:
+                ek = t.get("epic_key", "")
+                es = t.get("epic_summary", "")
+                epic_label = f"[{ek}] {es}".strip() if (ek and es) else (f"[{ek}]" if ek else "Sprint Items")
 
-                    # Normalize role name
-                    if "Sad" in sub_role or "System" in sub_role or "Design" in sub_role or "Dokumen" in sub_role or "fridolin" in assignee.lower() or "adenito" in assignee.lower():
-                        canonical_role = "SAD"
-                    elif "Front" in sub_role or "Web" in sub_role:
-                        canonical_role = "Frontend"
-                    elif "Back" in sub_role:
-                        canonical_role = "Backend"
-                    elif "Mob" in sub_role or "Android" in sub_role or "Ios" in sub_role:
-                        canonical_role = "Mobile"
-                    elif "Qa" in sub_role or "Test" in sub_role:
-                        canonical_role = "QA"
-                    elif sub_role == "Unassigned":
-                        canonical_role = "Unassigned"
+                pk = t.get("parent_key") or "Story"
+                ps = t.get("parent_summary") or ""
+                story_label = f"[{pk}] {ps}".strip() if (ps and ps != "-") else f"[{pk}]"
+
+                tree[epic_label][story_label].append(t)
+
+            for epic_title, stories_dict in tree.items():
+                message += f"<b>EPIC: {epic_title}</b>\n"
+                for story_title, sub_list in stories_dict.items():
+                    if len(sub_list) == 1 and sub_list[0].get("is_direct_story"):
+                        st_item = sub_list[0]
+                        st_stat = st_item.get("status", "To Do")
+                        assignee = st_item.get("assignee", "Unassigned") or "Unassigned"
+                        clean_name = assignee.strip().upper()
+                        tag = emp_tag_map.get(clean_name, "")
+                        assignee_display = f"{tag} ({assignee})" if tag else (assignee if assignee.lower() != "unassigned" else "<i>Belum Diambil</i>")
+                        message += f"     <b>{story_title}</b>\n     ↳ <i>Status: {st_stat} | Assignee: {assignee_display}</i>\n"
                     else:
-                        canonical_role = "General"
-
-                    p_key = t.get("parent_key") or "Parent Story"
-                    p_sum = t.get("parent_summary") or ""
-                    parent_label = f"[{p_key}] {p_sum}" if (p_sum and p_sum != "-") else (f"[{p_key}]" if p_key != "-" else "")
-
-                    grouped_by_role[canonical_role][assignee][parent_label].append(t)
-
-            # 2. Render clean structured blocks per role
-            sorted_roles = sorted(
-                grouped_by_role.keys(),
-                key=lambda r: role_order.index(r) if r in role_order else 99
-            )
-
-            for role_name in sorted_roles:
-                devs_dict = grouped_by_role[role_name]
-                if not devs_dict:
-                    continue
-
-                role_header = f"<b>[{role_name.upper()}]</b>\n"
-                message += role_header
-
-                for assignee, parents_dict in devs_dict.items():
-                    clean_name = assignee.strip().upper()
-                    tag = emp_tag_map.get(clean_name, "")
-                    tag_str = f"{tag} " if tag else ""
-
-                    tot_dev_tasks = sum(len(ts) for ts in parents_dict.values())
-                    if assignee.lower() == "unassigned":
-                        dev_header = f"<b>Belum Diambil (Unassigned)</b> - <i>{tot_dev_tasks} Task</i>\n"
-                    else:
-                        dev_header = f"<b>{tag_str}{assignee}</b> - <i>{tot_dev_tasks} Task</i>\n"
-                    message += dev_header
-
-                    for parent_title, t_list in parents_dict.items():
-                        if parent_title:
-                            message += f"\n  Parent: <b>{parent_title}</b>\n"
-                        for idx, t in enumerate(t_list[:5], 1):
+                        message += f"  📁 <b>{story_title}</b> (<i>{len(sub_list)} Subtask</i>)\n"
+                        for idx, t in enumerate(sub_list[:8], 1):
                             t_key = t.get("key", "")
                             t_sum = t.get("summary", "")
                             t_stat = t.get("status", "To Do")
-                            message += f"  {idx}. [{t_key}] {t_sum} ({t_stat})\n"
-                        if len(t_list) > 5:
-                            message += f"  <i>...dan {len(t_list) - 5} subtask lainnya</i>\n"
+                            assignee = t.get("assignee", "Unassigned") or "Unassigned"
+                            clean_name = assignee.strip().upper()
+                            tag = emp_tag_map.get(clean_name, "")
+                            assignee_display = f"{tag} ({assignee})" if tag else (assignee if assignee.lower() != "unassigned" else "<i>Belum Diambil</i>")
+
+                            sub_role = str(t.get("role") or "").strip().lower()
+                            if "front" in sub_role or "web" in sub_role:
+                                role_badge = "[FE] "
+                            elif "back" in sub_role:
+                                role_badge = "[BE] "
+                            elif "mob" in sub_role:
+                                role_badge = "[Mobile] "
+                            elif "qa" in sub_role:
+                                role_badge = "[QA] "
+                            else:
+                                role_badge = ""
+
+                            message += f"     {idx}. [{t_key}] {role_badge}{t_sum}\n        ↳ <i>Status: {t_stat} | Assignee: {assignee_display}</i>\n"
+                        if len(sub_list) > 8:
+                            message += f"     <i>...dan {len(sub_list) - 8} subtask lainnya</i>\n"
                     message += "\n"
 
-            message += "<i>Mohon tim menindaklanjuti tugas pending sebelum akhir sprint.</i>"
+            message += footer_note
         else:
             message += "<i>Seluruh subtask pada sprint ini telah selesai (100% Done).</i>"
 

@@ -251,7 +251,7 @@ class PandasExcelParser:
                                 detected_role = "mobile"
                             elif item_lower.startswith("fe -") or item_lower.startswith("web -") or item_lower.startswith("wlb -") or item_lower.startswith("[web"):
                                 detected_role = "frontend"
-                            elif item_lower.startswith("be -") or item_lower.startswith("service -") or "[mcs" in item_lower or "[las" in item_lower or "mcs core" in item_lower:
+                            elif item_lower.startswith("be -") or item_lower.startswith("service -") or "[msc" in item_lower or "[mcs" in item_lower or "[las" in item_lower or "msc core" in item_lower or "mcs core" in item_lower:
                                 detected_role = "backend"
                             elif item_lower.startswith("qa -") or "review" in item_lower:
                                 detected_role = "qa"

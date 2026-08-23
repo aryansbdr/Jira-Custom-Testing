@@ -102,7 +102,7 @@ def main():
    
     if main_menu == "3":
         default_project = "JT"
-        input_key = input(f"\nMasukkan Project Key / URL Dashboard Jira / Epic Key (default: '{default_project}', contoh: JT, https://jira.bri.co.id/...selectPageId=26953): ").strip()
+        input_key = input(f"\nMasukkan Project Key / Query JQL / URL Dashboard Jira / Epic Key\n(default: '{default_project}', contoh: JT, 26953, BL-38812, atau project = BL AND resolution = Unresolved...): ").strip()
         if not input_key:
             input_key = default_project
 
@@ -156,7 +156,15 @@ def main():
 
     if main_menu == "2":
         default_project = "JT"
-        input_key = input(f"\nMasukkan Project Key, URL/ID Dashboard, atau Epic Key (default: '{default_project}', contoh: JT, https://jira.bri.co.id/...selectPageId=26953, BL-38812): ").strip()
+        print("\n" + "-" * 70)
+        print("PILIHAN TARGET LAPORAN EXCEL:")
+        print("  • Project Key       : contoh 'JT' atau 'BL'")
+        print("  • Raw JQL Query     : contoh 'project = BL AND resolution = Unresolved ORDER BY priority DESC, updated DESC'")
+        print("  • URL/ID Dashboard  : contoh '26953' atau 'https://jira.bri.co.id/...selectPageId=26953'")
+        print("  • Epic Key / Issue  : contoh 'BL-38812' atau 'JT-161'")
+        print("  • Filter ID         : contoh '48596'")
+        print("-" * 70)
+        input_key = input(f"Masukkan Project Key / Query JQL / Dashboard ID [default: '{default_project}']: ").strip()
         if not input_key:
             input_key = default_project
 
@@ -184,7 +192,14 @@ def main():
             reporter = ExcelReporter()
             safe_key = "".join([c for c in input_key if c.isalnum() or c in ("-", "_")]).strip() or "Sprint_Report"
             filename = reporter.generate_progress_report(progress_data, safe_key)
-            print(f"\nSUKSES! Laporan Excel lengkap (dengan daftar Epic & grafik) berhasil dibuat:\n   📂 {filename}")
+
+            print(f"\n{'=' * 65}")
+            print(f"  ✅  LAPORAN EXCEL BERHASIL DIBUAT!")
+            print(f"{'=' * 65}")
+            print(f"  📂 Lokasi File  : {filename}")
+            print(f"  📁 Folder       : {os.path.dirname(filename)}")
+            print(f"  📄 Nama File    : {os.path.basename(filename)}")
+            print(f"{'=' * 65}")
             return
         except Exception as e:
             print(f"Gagal mengambil data progress atau membuat file Excel: {e}")
@@ -379,73 +394,259 @@ def main():
         except Exception as e:
             print(f"Warning: Gagal mengekspor laporan Excel: {e}")
 
-    # 10. Request confirmation before committing to Jira
-
-    confirm = (
-        input("Apakah Anda ingin menerapkan & membuat subtask ini di Jira? (y/n): ")
-        .strip()
-        .lower()
-    )
-    if confirm != "y":
-        print("Proses dibatalkan. Tidak ada perubahan yang disimpan ke Jira.")
-        return
-
-    # 10. Write subtasks to Jira (With Deduplication Check)
-    print("\nMulai menulis subtask ke Jira...")
-    created_count = 0
-    skipped_count = 0
-
-    # Cache existing subtask summaries per parent key to avoid duplicate Jira issues
-    parent_existing_subtasks = {}
-
+    # 10. Interactive & Intuitive Subtask Selection Before Committing to Jira
+    # Group tasks hierarchically by Parent Story
+    story_map = {}
     for item in active_assignments:
         emp = item["employee"]
-        print(f"\nMencari akun Jira untuk {emp['name']}...")
-        jira_id = jira_client.find_user_by_name(emp["name"], pn=emp.get("pn"))
-
-        if not jira_id:
-            print(
-                f"Warning: Akun Jira '{emp['name']}' tidak ditemukan. Subtask akan dibuat tanpa assignee."
-            )
-
         for t in item["assigned_subtasks"]:
-            parent_key = t["parent_key"]
-            sub_summary = t["summary"].strip()
-            sub_summary_lower = sub_summary.lower()
+            parent_k = t.get("parent_key", "GENERAL")
+            if parent_k not in story_map:
+                story_map[parent_k] = {
+                    "parent_key": parent_k,
+                    "parent_summary": t.get("parent_summary", ""),
+                    "subtasks": []
+                }
+            story_map[parent_k]["subtasks"].append({
+                "subtask": t,
+                "employee": emp
+            })
 
-            # Lazy-load existing subtasks for this parent
-            if parent_key not in parent_existing_subtasks:
-                parent_existing_subtasks[parent_key] = jira_client.get_existing_subtask_summaries(parent_key)
+    total_stories = len(story_map)
+    flat_tasks = []
+    
+    for s_idx, (parent_k, st_info) in enumerate(story_map.items(), 1):
+        for sub_idx, item_task in enumerate(st_info["subtasks"], 1):
+            code_str = f"{s_idx}.{sub_idx}" if total_stories > 1 else f"{sub_idx}"
+            flat_tasks.append({
+                "story_idx": s_idx,
+                "sub_idx": sub_idx,
+                "code": code_str,
+                "subtask": item_task["subtask"],
+                "employee": item_task["employee"],
+            })
 
-            existing_titles = parent_existing_subtasks[parent_key]
+    if not flat_tasks:
+        print("\nTidak ada subtask yang dialokasikan untuk di-push.")
+        return
 
-            # DEDUPLICATION CHECK: Skip if already exists in Jira
-            if sub_summary_lower in existing_titles:
-                print(f" [SKIP DUPLIKAT] Subtask '{sub_summary}' sudah ada di tiket {parent_key}.")
-                skipped_count += 1
+    print("\n" + "=" * 72)
+    print("        PILIH SUBTASK YANG INGIN DIBUAT (PUSH) KE JIRA        ")
+    print("=" * 72)
+
+    current_story_idx = None
+    for item_task in flat_tasks:
+        s_idx = item_task["story_idx"]
+        t = item_task["subtask"]
+        emp = item_task["employee"]
+        role_badge = "[FE]" if "front" in str(t.get("role", "")).lower() or "web" in str(t.get("role", "")).lower() or "mobile" in str(t.get("role", "")).lower() else "[BE]"
+        parent_k = t.get("parent_key", "")
+        parent_title = t.get("parent_summary", "")
+
+        if s_idx != current_story_idx:
+            current_story_idx = s_idx
+            story_prefix = f"📁 STORY {s_idx}: [{parent_k}] {parent_title}".strip() if total_stories > 1 else f"📁 [{parent_k}] {parent_title}".strip()
+            print(f"\n  {story_prefix}")
+            print("  " + "─" * 68)
+
+        print(f"    [{item_task['sub_idx']:>2}] {role_badge} {t['summary']}  (Assignee: {emp['name']})")
+
+    print("\n" + "=" * 72)
+    print("Opsi Input (Format: <Index Story>: <Nomor Subtask>):")
+    if total_stories > 1:
+        print("  • Tekan [Enter] atau ketik 'all'          : Push SEMUA subtask")
+        print("  • Buang subtask di Story tertentu         : contoh: '1: 2, 5' (Story 1 buang #2 dan #5)")
+        print("  • Buang rentang di Story tertentu         : contoh: '1: 2-4' (Story 1 buang #2 s/d #4)")
+        print("  • Buang 1 Story penuh                     : contoh: 'skip 2' atau '!2' (Buang Story 2)")
+        print("  • Bisa sebut Key langsung                 : contoh: 'JT-284: 2, 5'")
+        print("  • Filter Role                             : contoh: 'fe' atau 'be'")
+    else:
+        print("  • Tekan [Enter] atau ketik 'all'          : Push SEMUA subtask")
+        print("  • Ketik nomor (contoh: 1-4, 6)            : Hanya push nomor tersebut")
+        print("  • Ketik 'skip 2, 5' atau '!2, 5'          : Push semua KECUALI nomor 2 dan 5")
+    print("  • Ketik 'n' atau 'batal'                  : Batalkan (tidak ada tiket dibuat)")
+    print("-" * 72)
+
+    import re
+    def _parse_cli_selection(input_str: str, tasks_list: list, num_stories: int) -> set:
+        s = input_str.strip().lower()
+        total_count = len(tasks_list)
+        if not s or s in ("all", "y", "ya", "yes", "*"):
+            return set(range(total_count))
+        if s in ("n", "no", "tidak", "cancel", "0", "none", "batal"):
+            return set()
+
+        is_exclude = False
+        if s.startswith(("skip", "except", "kecuali", "buang", "hapus")):
+            is_exclude = True
+            s = re.sub(r'^(skip|except|kecuali|buang|hapus)\s*', '', s).strip()
+        elif s.startswith(("!", "-")) or s.startswith("x "):
+            is_exclude = True
+            s = s[1:].strip() if not s.startswith("x ") else s[2:].strip()
+
+        matched_indices = set()
+
+        # Check for syntax like '1: 2, 5' or 'JT-284: 2, 5' or '1: 2-4'
+        colon_patterns = re.findall(r'([a-zA-Z0-9_\-]+)\s*[:]\s*([0-9\s,\-]+)', s)
+        if colon_patterns:
+            for key_part, nums_part in colon_patterns:
+                target_story_indices = []
+                for i, itm in enumerate(tasks_list):
+                    if key_part.isdigit() and itm["story_idx"] == int(key_part):
+                        target_story_indices.append(i)
+                    elif not key_part.isdigit() and (key_part == str(itm["subtask"].get("parent_key", "")).lower() or (len(key_part) >= 3 and key_part in str(itm["subtask"].get("parent_key", "")).lower())):
+                        target_story_indices.append(i)
+
+                num_tokens = [n.strip() for n in re.split(r'[\s,]+', nums_part) if n.strip()]
+                for n_tok in num_tokens:
+                    if "-" in n_tok and not n_tok.startswith("-"):
+                        p = n_tok.split("-")
+                        if len(p) == 2 and p[0].isdigit() and p[1].isdigit():
+                            for v in range(min(int(p[0]), int(p[1])), max(int(p[0]), int(p[1])) + 1):
+                                for i in target_story_indices:
+                                    if tasks_list[i]["sub_idx"] == v:
+                                        matched_indices.add(i)
+                            continue
+                    if n_tok.isdigit():
+                        v = int(n_tok)
+                        for i in target_story_indices:
+                            if tasks_list[i]["sub_idx"] == v:
+                                matched_indices.add(i)
+
+            all_indices = set(range(total_count))
+            return all_indices - matched_indices
+
+        # Tokenize remaining inputs
+        tokens = [t.strip(' ,') for t in re.split(r'[\s,]+', s) if t.strip(' ,')]
+        for tok in tokens:
+            if not tok:
                 continue
+            # Role filter
+            if tok in ("fe", "frontend", "web", "mobile"):
+                for i, itm in enumerate(tasks_list):
+                    sub_r = str(itm["subtask"].get("role", "")).lower()
+                    if "front" in sub_r or "web" in sub_r or "mobile" in sub_r or sub_r == "fe":
+                        matched_indices.add(i)
+                continue
+            if tok in ("be", "backend"):
+                for i, itm in enumerate(tasks_list):
+                    sub_r = str(itm["subtask"].get("role", "")).lower()
+                    if "back" in sub_r or "be" in sub_r:
+                        matched_indices.add(i)
+                continue
+            # Single story index (when num_stories > 1, e.g. '2' selects whole Story 2)
+            if tok.isdigit() and num_stories > 1:
+                val = int(tok)
+                for i, itm in enumerate(tasks_list):
+                    if itm["story_idx"] == val:
+                        matched_indices.add(i)
+                continue
+            # Single subtask index (when num_stories == 1, e.g. '2' selects subtask 2)
+            if tok.isdigit() and num_stories == 1:
+                val = int(tok)
+                for i, itm in enumerate(tasks_list):
+                    if itm["sub_idx"] == val:
+                        matched_indices.add(i)
+                continue
+            # Numeric range when num_stories == 1 (e.g. 1-4)
+            if "-" in tok and not tok.startswith("-") and num_stories == 1:
+                parts = tok.split("-")
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    for i, itm in enumerate(tasks_list):
+                        if min(int(parts[0]), int(parts[1])) <= itm["sub_idx"] <= max(int(parts[0]), int(parts[1])):
+                            matched_indices.add(i)
+                    continue
+            # Ticket Key filter (e.g. JT-284 or 284)
+            ticket_matched = False
+            for i, itm in enumerate(tasks_list):
+                pk = str(itm["subtask"].get("parent_key", "")).lower()
+                if tok == pk or (len(tok) >= 3 and tok in pk):
+                    matched_indices.add(i)
+                    ticket_matched = True
+            if ticket_matched:
+                continue
+            # Assignee filter (e.g. aryan, habibi)
+            for i, itm in enumerate(tasks_list):
+                emp_n = str(itm["employee"].get("name", "")).lower()
+                if len(tok) >= 3 and tok in emp_n:
+                    matched_indices.add(i)
 
-            print(
-                f"Membuat subtask: '{sub_summary}' di bawah parent {parent_key}..."
+        all_indices = set(range(total_count))
+        return (all_indices - matched_indices) if is_exclude else matched_indices
+
+    user_sel_input = input("Pilihan Anda [Tekan Enter untuk semua]: ").strip()
+    selected_indices = _parse_cli_selection(user_sel_input, flat_tasks, total_stories)
+
+    if not selected_indices:
+        print("\n❌ Proses dibatalkan. Tidak ada subtask yang dibuat ke Jira.")
+        return
+
+    tasks_to_create = [flat_tasks[i] for i in sorted(selected_indices)]
+
+    print(f"\n-> Anda memilih {len(tasks_to_create)} dari {len(flat_tasks)} subtask:")
+    for idx, item_task in enumerate(tasks_to_create, 1):
+        t = item_task["subtask"]
+        emp = item_task["employee"]
+        print(f"   {idx}. {t['summary']} (-> {emp['name']})")
+
+    final_confirm = input("\nLanjutkan push tiket ke Jira? [Y/n, default Y]: ").strip().lower()
+    if final_confirm in ("n", "no", "tidak", "cancel", "batal"):
+        print("❌ Pembuatan tiket ke Jira dibatalkan.")
+        return
+
+    # 11. Write chosen subtasks to Jira (With Deduplication Check)
+    print("\n🚀 Mulai menulis subtask ke Jira...")
+    created_count = 0
+    skipped_count = 0
+    parent_existing_subtasks = {}
+
+    # Cache user Jira IDs by PN / name
+    jira_user_ids = {}
+
+    for item_task in tasks_to_create:
+        t = item_task["subtask"]
+        emp = item_task["employee"]
+        emp_key = emp.get("pn") or emp.get("name")
+
+        if emp_key not in jira_user_ids:
+            print(f"\nMencari akun Jira untuk {emp['name']}...")
+            jira_id = jira_client.find_user_by_name(emp["name"], pn=emp.get("pn"))
+            if not jira_id:
+                print(f"Warning: Akun Jira '{emp['name']}' tidak ditemukan. Subtask akan dibuat tanpa assignee.")
+            jira_user_ids[emp_key] = jira_id
+
+        jira_id = jira_user_ids[emp_key]
+        parent_key = t["parent_key"]
+        sub_summary = t["summary"].strip()
+        sub_summary_lower = sub_summary.lower()
+
+        if parent_key not in parent_existing_subtasks:
+            parent_existing_subtasks[parent_key] = jira_client.get_existing_subtask_summaries(parent_key)
+
+        existing_titles = parent_existing_subtasks[parent_key]
+
+        if sub_summary_lower in existing_titles:
+            print(f" ⚠️  [SKIP DUPLIKAT] Subtask '{sub_summary}' sudah ada di tiket {parent_key}.")
+            skipped_count += 1
+            continue
+
+        print(f"Membuat subtask: '{sub_summary}' di bawah parent {parent_key}...")
+        try:
+            result = jira_client.create_subtask_issue(
+                parent_key=parent_key,
+                summary=sub_summary,
+                description=t.get("description", ""),
+                story_points=0,
+                assignee_id=jira_id,
+                parent_type=t.get("parent_type", "task"),
             )
-            try:
-                result = jira_client.create_subtask_issue(
-                    parent_key=parent_key,
-                    summary=sub_summary,
-                    description=t["description"],
-                    story_points=0,
-                    assignee_id=jira_id,
-                    parent_type=t.get("parent_type", "task"),
-                )
+            print(f" ✅ Sukses! Subtask Key: {result.get('key')}")
+            created_count += 1
+            existing_titles.add(sub_summary_lower)
+        except Exception as e:
+            print(f" ❌ Gagal membuat subtask: {e}")
 
-                print(f"Sukses! Subtask Key: {result.get('key')}")
-                created_count += 1
-                # Add to local cache so we don't duplicate within the same run
-                existing_titles.add(sub_summary_lower)
-            except Exception as e:
-                print(f" Gagal membuat subtask: {e}")
-
-    summary_msg = f"\nSelesai! Berhasil membuat {created_count} subtask baru di Jira."
+    summary_msg = f"\n🎉 Selesai! Berhasil membuat {created_count} subtask baru di Jira."
     if skipped_count > 0:
         summary_msg += f" ({skipped_count} subtask duplikat dilewati)."
     print(summary_msg)

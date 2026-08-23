@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import openpyxl
 from openpyxl.chart import BarChart, DoughnutChart, Reference
+from openpyxl.chart.data_source import AxDataSource, StrRef, StrData, StrVal
 from openpyxl.chart.label import DataLabelList
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
@@ -78,12 +79,58 @@ class ExcelReporter:
     collapsible hierarchies, and multi-date historical snapshots.
     """
 
+    @staticmethod
+    def _get_professional_filename(safe_key: str, report_data: Dict[str, Any] = None) -> str:
+        raw_key = str((report_data or {}).get("root_key") or safe_key or "").strip()
+        
+        # 1. Extract Squad / Component name if present
+        comp_match = re.search(r"component\s*(?:=|\bIN\b)\s*\(?['\"]?([^'\")]*)['\"]?\)?", raw_key, re.IGNORECASE)
+        if comp_match:
+            comp_name = comp_match.group(1).strip()
+            clean_comp = re.sub(r'[^\w\s-]', '', comp_name).strip()
+            clean_comp = re.sub(r'[\s-]+', '_', clean_comp)
+            if clean_comp:
+                return clean_comp
+
+        # 2. Extract Project name if JQL specifies project
+        proj_match = re.search(r"project\s*=\s*['\"]?([A-Za-z0-9_]+)['\"]?", raw_key, re.IGNORECASE)
+        if proj_match and len(raw_key) > 25:
+            p_val = proj_match.group(1).strip()
+            return f"Project_{p_val}"
+
+        # 3. Check for Dashboard title in report_data
+        if report_data and report_data.get("root_summary"):
+            summary = str(report_data.get("root_summary")).strip()
+            clean_sum = re.sub(r'[^\w\s-]', '', summary).strip()
+            clean_sum = re.sub(r'[\s-]+', '_', clean_sum)
+            if 2 <= len(clean_sum) <= 35 and "custom" not in clean_sum.lower():
+                return clean_sum
+
+        # 4. Numeric Dashboard / Filter ID
+        if raw_key.isdigit():
+            return f"Dashboard_{raw_key}"
+
+        # 5. Clean short key (e.g. "BL-38812", "BL", "JT")
+        if len(raw_key) <= 25 and not (" " in raw_key or "=" in raw_key):
+            clean_raw = re.sub(r'[^\w\s-]', '', raw_key).strip()
+            clean_raw = re.sub(r'[\s-]+', '_', clean_raw)
+            if clean_raw:
+                return clean_raw
+
+        return "Squad_Progress"
+
     def generate_progress_report(
         self, report_data: Dict[str, Any], safe_key: str, output_path: str = "."
     ) -> str:
         """
         Main entrypoint to generate or update the Sprint & Squad Progress Excel report (.xlsx).
         Creates a dedicated sheet per date for multi-date sprint tracking.
+
+        Output folder structure:
+            Laporan/{PROJECT}/{YYYY}/{MM-MMMM}/{DD-MM-YYYY}_{SQUAD_NAME}.xlsx
+
+        Example:
+            Laporan/BL/2026/08-Agustus/Laporan_Progress_Squad_Korporasi_23-08-2026.xlsx
         """
         base_jira_url = settings.JIRA_URL.rstrip("/")
         root_key = report_data.get("root_key", safe_key)
@@ -91,11 +138,42 @@ class ExcelReporter:
 
         today_date_str = datetime.datetime.now().strftime("%d-%m-%Y")
         sheet_title = today_date_str
-        filename = f"Laporan_Progress_{safe_key}.xlsx"
-        full_path = os.path.join(output_path, filename)
+
+        prof_name = self._get_professional_filename(safe_key, report_data)
+        filename = f"Laporan_Progress_{prof_name}_{today_date_str}.xlsx"
+
+        # ---------------------------------------------------------------
+        # Build structured output folder: Laporan/{PROJECT}/{YYYY}/{MM-NamaBulan}/
+        # ---------------------------------------------------------------
+        # Extract project code from root_key (e.g. "BL" from "BL-38812", or "JT" from "JT-161")
+        project_code = "Umum"
+        raw_key_for_proj = str(root_key or safe_key or "").strip()
+        proj_prefix_match = re.match(r'^([A-Za-z]{1,8})(?:-\d+)?$', raw_key_for_proj)
+        if proj_prefix_match:
+            project_code = proj_prefix_match.group(1).upper()
+        else:
+            # Try to extract from JQL: project = BL or project = "BL"
+            jql_proj = re.search(r'project\s*=\s*[\'"]?([A-Za-z0-9_]+)[\'"]?', raw_key_for_proj, re.IGNORECASE)
+            if jql_proj:
+                project_code = jql_proj.group(1).upper()
+
+        # Build YYYY and MM-NamaBulan folder names
+        now = datetime.datetime.now()
+        year_folder = now.strftime("%Y")
+        bulan_id = [
+            "", "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+            "Juli", "Agustus", "September", "Oktober", "November", "Desember"
+        ]
+        month_folder = f"{now.strftime('%m')}-{bulan_id[now.month]}"
+
+        # Compose final folder path (relative to output_path base)
+        structured_folder = os.path.join(output_path, "Laporan", project_code, year_folder, month_folder)
+        os.makedirs(structured_folder, exist_ok=True)
+
+        full_path = os.path.join(structured_folder, filename)
 
         # 1. Initialize Workbook & Worksheet
-        workbook, worksheet = self._initialize_workbook(full_path, sheet_title)
+        workbook, worksheet, chart_worksheet = self._initialize_workbook(full_path, sheet_title)
         theme = ReportTheme()
 
         # 2. Render Header Block & Top KPI Cards
@@ -110,20 +188,23 @@ class ExcelReporter:
 
         # 3. Render Section 1: Developer Summary Table & Donut Charts
         member_progress = report_data.get("member_progress", [])
+        overall_status = report_data.get("overall_status", {})
         total_member_row, active_members = self._render_developer_summary(
             worksheet=worksheet,
             member_progress=member_progress,
+            overall_status=overall_status,
             theme=theme,
         )
-        self._render_developer_donut_charts(
+        max_chart_bottom_row = self._render_developer_donut_charts(
             worksheet=worksheet,
+            chart_worksheet=chart_worksheet,
             active_members=active_members,
-            overall_status=report_data.get("overall_status", {}),
+            overall_status=overall_status,
             total_member_row=total_member_row,
         )
 
-        # 4. Render Section 2: Progress per Parent Story / Epic
-        section_2_start_row = max(total_member_row + 4, 27)
+        # 4. Render Section 2: Progress per Parent Story / Epic (placed below BOTH table and charts)
+        section_2_start_row = max(total_member_row + 4, max_chart_bottom_row + 3, 27)
         section_2_end_row, active_chart_stories = self._render_story_progress_section(
             worksheet=worksheet,
             report_data=report_data,
@@ -133,6 +214,7 @@ class ExcelReporter:
         )
         self._render_story_progress_chart(
             worksheet=worksheet,
+            chart_worksheet=chart_worksheet,
             active_chart_stories=active_chart_stories,
             chart_start_row=section_2_start_row,
         )
@@ -151,6 +233,7 @@ class ExcelReporter:
         )
         self._render_role_distribution_chart(
             worksheet=worksheet,
+            chart_worksheet=chart_worksheet,
             detailed_subtasks=detailed_subtasks,
             start_row=section_3_start_row,
         )
@@ -167,26 +250,33 @@ class ExcelReporter:
 
     def _initialize_workbook(
         self, full_path: str, sheet_title: str
-    ) -> Tuple[openpyxl.Workbook, Worksheet]:
-        """Initializes or loads an existing workbook, setting up a fresh sheet for today's snapshot."""
+    ) -> Tuple[openpyxl.Workbook, Worksheet, Worksheet]:
+        """Initializes or loads an existing workbook, setting up a fresh sheet for today's snapshot and a hidden chart data sheet."""
+        chart_sheet_title = f"_ChartData_{sheet_title}"
         if os.path.exists(full_path):
             try:
                 workbook = openpyxl.load_workbook(full_path)
                 if sheet_title in workbook.sheetnames:
                     workbook.remove(workbook[sheet_title])
+                if chart_sheet_title in workbook.sheetnames:
+                    workbook.remove(workbook[chart_sheet_title])
                 worksheet = workbook.create_sheet(title=sheet_title)
+                chart_worksheet = workbook.create_sheet(title=chart_sheet_title)
             except Exception:
                 workbook = openpyxl.Workbook()
                 worksheet = workbook.active
                 worksheet.title = sheet_title
+                chart_worksheet = workbook.create_sheet(title=chart_sheet_title)
         else:
             workbook = openpyxl.Workbook()
             worksheet = workbook.active
             worksheet.title = sheet_title
+            chart_worksheet = workbook.create_sheet(title=chart_sheet_title)
 
+        chart_worksheet.sheet_state = "hidden"
         workbook.active = worksheet
         worksheet.views.sheetView[0].showGridLines = True
-        return workbook, worksheet
+        return workbook, worksheet, chart_worksheet
 
     def _format_sprint_date(self, date_value: Any) -> str:
         """Formats ISO or slash-separated date strings into readable Indonesian/Standard format."""
@@ -291,7 +381,8 @@ class ExcelReporter:
         self,
         worksheet: Worksheet,
         member_progress: List[Dict[str, Any]],
-        theme: ReportTheme,
+        overall_status: Optional[Dict[str, Any]] = None,
+        theme: ReportTheme = ReportTheme(),
     ) -> Tuple[int, List[Dict[str, Any]]]:
         """Renders Section 1 table: Developer progress summary and Total row."""
         worksheet["A7"] = "1. RINGKASAN PROGRESS PER DEVELOPER"
@@ -315,12 +406,47 @@ class ExcelReporter:
             cell.border = theme.THIN_BORDER
         worksheet.row_dimensions[8].height = 22
 
-        # Sort: active members first (descending by subtask count), then idle
-        active_members = [m for m in member_progress if m.get("total_subtasks", 0) > 0]
+        # Separate real members vs unassigned
+        real_members = [
+            m for m in member_progress 
+            if not m.get("is_unassigned") and "unassigned" not in str(m.get("name", "")).lower()
+        ]
+        unassigned_entry = next(
+            (m for m in member_progress if m.get("is_unassigned") or "unassigned" in str(m.get("name", "")).lower()), 
+            None
+        )
+
+        active_members = [m for m in real_members if m.get("total_subtasks", 0) > 0]
         active_members.sort(key=lambda x: x.get("total_subtasks", 0), reverse=True)
-        idle_members = [m for m in member_progress if m.get("total_subtasks", 0) == 0]
+        idle_members = [m for m in real_members if m.get("total_subtasks", 0) == 0]
         idle_members.sort(key=lambda x: x.get("name", ""))
-        sorted_members = active_members + idle_members
+
+        sorted_members = list(active_members)
+
+        if unassigned_entry:
+            sorted_members.append(unassigned_entry)
+        elif overall_status:
+            # Fallback calculate unassigned if not present in member_progress
+            assigned_todo = sum(m.get("todo", 0) for m in real_members)
+            assigned_prog = sum(m.get("in_progress", 0) for m in real_members)
+            assigned_done = sum(m.get("done", 0) for m in real_members)
+
+            unassigned_todo = max(0, overall_status.get("todo", 0) - assigned_todo)
+            unassigned_prog = max(0, overall_status.get("in_progress", 0) - assigned_prog)
+            unassigned_done = max(0, overall_status.get("done", 0) - assigned_done)
+            unassigned_total = unassigned_todo + unassigned_prog + unassigned_done
+            if unassigned_total > 0:
+                sorted_members.append({
+                    "name": "Belum Diambil (Unassigned)",
+                    "role": "-",
+                    "todo": unassigned_todo,
+                    "in_progress": unassigned_prog,
+                    "done": unassigned_done,
+                    "total_subtasks": unassigned_total,
+                    "is_unassigned": True,
+                })
+
+        sorted_members.extend(idle_members)
 
         current_row = 9
         for idx, member in enumerate(sorted_members):
@@ -334,7 +460,8 @@ class ExcelReporter:
             cell_tot  = worksheet.cell(row=current_row, column=6, value=f"=SUM(C{current_row}:E{current_row})")
             cell_pct  = worksheet.cell(row=current_row, column=7, value=f'=IF(F{current_row}=0, 0, E{current_row}/F{current_row})')
 
-            cell_name.font = theme.FONT_BOLD if member.get("total_subtasks", 0) > 0 else theme.FONT_DATA
+            is_bold = member.get("total_subtasks", 0) > 0 and not member.get("is_unassigned")
+            cell_name.font = theme.FONT_BOLD if is_bold else (theme.FONT_MUTED if member.get("is_unassigned") else theme.FONT_DATA)
             cell_role.font = theme.FONT_DATA
             cell_todo.font = theme.FONT_DATA
             cell_prog.font = theme.FONT_DATA
@@ -386,85 +513,169 @@ class ExcelReporter:
     def _render_developer_donut_charts(
         self,
         worksheet: Worksheet,
+        chart_worksheet: Worksheet,
         active_members: List[Dict[str, Any]],
         overall_status: Dict[str, Any],
         total_member_row: int,
-    ) -> None:
-        """Renders clean Donut Charts per active developer + Overall Sprint status."""
+    ) -> int:
+        """Renders clean Donut Charts per active developer + Overall Sprint status in a multi-row grid layout."""
         chart_columns = ["J", "Q", "X", "AE"]
         eligible_devs = [
             m for m in active_members 
-            if str(m.get("name", "")).strip().lower() not in ("unassigned", "total", "total akumulasi tim", "-", "")
-        ][:3]
+            if str(m.get("name", "")).strip().lower() not in ("unassigned", "belum diambil (unassigned)", "total", "total akumulasi tim", "-", "")
+            and m.get("total_subtasks", 0) > 0
+        ]
 
-        for dev_idx, dev in enumerate(eligible_devs):
-            dev_name = dev.get("name", f"Developer {dev_idx+1}")
-            dev_role = dev.get("role", "")
-            helper_row = 260 + dev_idx * 5
-            todo_count = int(dev.get("todo", 0))
-            prog_count = int(dev.get("in_progress", 0))
-            done_count = int(dev.get("done", 0))
+        # 1. Slot 0: Overall Sprint Status Donut
+        todo_total = int(overall_status.get("todo", 0))
+        prog_total = int(overall_status.get("in_progress", 0))
+        done_total = int(overall_status.get("done", 0))
 
-            worksheet.cell(row=helper_row, column=1, value="Status")
-            worksheet.cell(row=helper_row, column=2, value="Jumlah")
-            worksheet.cell(row=helper_row + 1, column=1, value=f"To Do ({todo_count})")
-            worksheet.cell(row=helper_row + 1, column=2, value=todo_count)
-            worksheet.cell(row=helper_row + 2, column=1, value=f"In Progress ({prog_count})")
-            worksheet.cell(row=helper_row + 2, column=2, value=prog_count)
-            worksheet.cell(row=helper_row + 3, column=1, value=f"Done ({done_count})")
-            worksheet.cell(row=helper_row + 3, column=2, value=done_count)
+        overall_slices = []
+        if todo_total > 0:
+            overall_slices.append(("To Do", todo_total))
+        if prog_total > 0:
+            overall_slices.append(("In Progress", prog_total))
+        if done_total > 0:
+            overall_slices.append(("Done", done_total))
 
-            chart_dev = DoughnutChart()
-            chart_dev.title = f"{dev_name} ({dev_role})" if dev_role else dev_name
-            chart_dev.dataLabels = DataLabelList()
-            chart_dev.dataLabels.showPercent = True
-            chart_dev.dataLabels.showVal = False
-            chart_dev.dataLabels.showCatName = False
-            chart_dev.dataLabels.showSerName = False
-            chart_dev.legend.legendPos = "b"
+        if not overall_slices:
+            overall_slices.append(("To Do", 0))
 
-            data_ref = Reference(worksheet, min_col=2, min_row=helper_row, max_row=helper_row + 3)
-            cats_ref = Reference(worksheet, min_col=1, min_row=helper_row + 1, max_row=helper_row + 3)
-            chart_dev.add_data(data_ref, titles_from_data=True)
-            chart_dev.set_categories(cats_ref)
-            chart_dev.height = 11
-            chart_dev.width = 11
+        chart_worksheet.cell(row=1, column=1, value="Status")
+        chart_worksheet.cell(row=1, column=2, value="Jumlah")
 
-            worksheet.add_chart(chart_dev, f"{chart_columns[dev_idx]}6")
-
-        # Overall Sprint Donut
-        pie_helper_row = 250
-        todo_total = overall_status.get("todo", 0)
-        prog_total = overall_status.get("in_progress", 0)
-        done_total = overall_status.get("done", 0)
-
-        worksheet.cell(row=pie_helper_row, column=1, value="Status")
-        worksheet.cell(row=pie_helper_row, column=2, value="Jumlah")
-        worksheet.cell(row=pie_helper_row + 1, column=1, value=f"To Do ({todo_total})")
-        worksheet.cell(row=pie_helper_row + 1, column=2, value=f"=C{total_member_row}")
-        worksheet.cell(row=pie_helper_row + 2, column=1, value=f"In Progress ({prog_total})")
-        worksheet.cell(row=pie_helper_row + 2, column=2, value=f"=D{total_member_row}")
-        worksheet.cell(row=pie_helper_row + 3, column=1, value=f"Done ({done_total})")
-        worksheet.cell(row=pie_helper_row + 3, column=2, value=f"=E{total_member_row}")
+        for os_idx, (os_label, os_val) in enumerate(overall_slices, 2):
+            chart_worksheet.cell(row=os_idx, column=1, value=os_label)
+            chart_worksheet.cell(row=os_idx, column=2, value=os_val)
 
         chart_pie = DoughnutChart()
         chart_pie.title = "Proporsi Status Sprint Keseluruhan"
         chart_pie.dataLabels = DataLabelList()
         chart_pie.dataLabels.showPercent = True
-        chart_pie.dataLabels.showCatName = False
         chart_pie.dataLabels.showVal = False
+        chart_pie.dataLabels.showCatName = False
         chart_pie.dataLabels.showSerName = False
+        chart_pie.dataLabels.showLegendKey = False
+        chart_pie.dataLabels.numFmt = "0%"
         chart_pie.legend.legendPos = "b"
 
-        pie_data_ref = Reference(worksheet, min_col=2, min_row=pie_helper_row, max_row=pie_helper_row + 3)
-        pie_cats_ref = Reference(worksheet, min_col=1, min_row=pie_helper_row + 1, max_row=pie_helper_row + 3)
-        chart_pie.add_data(pie_data_ref, titles_from_data=True)
-        chart_pie.set_categories(pie_cats_ref)
+        data_ref_pie = Reference(chart_worksheet, min_col=2, min_row=1, max_row=1 + len(overall_slices))
+        cats_ref_pie = Reference(chart_worksheet, min_col=1, min_row=2, max_row=1 + len(overall_slices))
+        chart_pie.add_data(data_ref_pie, titles_from_data=True)
+        chart_pie.set_categories(cats_ref_pie)
+        # Overall sprint chart placed at AE6 - far right after all developer donut charts, no overlap with any table
         chart_pie.height = 11
-        chart_pie.width = 11
+        chart_pie.width = 10
+        worksheet.add_chart(chart_pie, "AE6")
 
-        target_pie_col = chart_columns[min(len(eligible_devs), 3)]
-        worksheet.add_chart(chart_pie, f"{target_pie_col}6")
+        max_chart_bottom_row = 20
+
+        # HYBRID CHART SELECTION:
+        # Case A: If 1 <= len(eligible_devs) <= 6 -> Generate clean Pie/Donut Charts per Developer!
+        if 1 <= len(eligible_devs) <= 6:
+            # Each chart is ~10 cols wide. Layout: Row 1 → J6, Q6, X6 | Row 2 → J22, Q22, X22
+            # Column J=10, Q=17, X=24 → 7 columns apart → no overlap for width=10
+            chart_columns = ["J", "Q", "X", "J", "Q", "X"]
+            for dev_idx, dev in enumerate(eligible_devs):
+                grid_col_letter = chart_columns[dev_idx % len(chart_columns)]
+                grid_row_start = 6 if dev_idx < 3 else 22
+
+                dev_name = dev.get("name", f"Developer {dev_idx+1}")
+                dev_role = dev.get("role", "")
+
+                col_cat = (dev_idx + 1) * 3 + 1
+                col_val = (dev_idx + 1) * 3 + 2
+
+                todo_count = int(dev.get("todo", 0))
+                prog_count = int(dev.get("in_progress", 0))
+                done_count = int(dev.get("done", 0))
+
+                status_slices = []
+                if todo_count > 0:
+                    status_slices.append(("To Do", todo_count))
+                if prog_count > 0:
+                    status_slices.append(("In Progress", prog_count))
+                if done_count > 0:
+                    status_slices.append(("Done", done_count))
+
+                if not status_slices:
+                    status_slices.append(("To Do", 0))
+
+                chart_worksheet.cell(row=1, column=col_cat, value="Status")
+                chart_worksheet.cell(row=1, column=col_val, value="Jumlah")
+
+                for s_idx, (s_label, s_val) in enumerate(status_slices, 2):
+                    chart_worksheet.cell(row=s_idx, column=col_cat, value=s_label)
+                    chart_worksheet.cell(row=s_idx, column=col_val, value=s_val)
+
+                chart_dev = DoughnutChart()
+                chart_dev.title = f"{dev_name} ({dev_role})" if dev_role else dev_name
+                chart_dev.dataLabels = DataLabelList()
+                chart_dev.dataLabels.showPercent = True
+                chart_dev.dataLabels.showVal = False
+                chart_dev.dataLabels.showCatName = False
+                chart_dev.dataLabels.showSerName = False
+                chart_dev.dataLabels.showLegendKey = False
+                chart_dev.dataLabels.numFmt = "0%"
+                chart_dev.legend.legendPos = "b"
+
+                data_ref = Reference(chart_worksheet, min_col=col_val, min_row=1, max_row=1 + len(status_slices))
+                cats_ref = Reference(chart_worksheet, min_col=col_cat, min_row=2, max_row=1 + len(status_slices))
+                chart_dev.add_data(data_ref, titles_from_data=True)
+                chart_dev.set_categories(cats_ref)
+                chart_dev.height = 11
+                chart_dev.width = 10  # 10 units wide, 7-column gap prevents overlap
+
+                worksheet.add_chart(chart_dev, f"{grid_col_letter}{grid_row_start}")
+                max_chart_bottom_row = max(max_chart_bottom_row, grid_row_start + 14)
+
+        # Case B: If len(eligible_devs) > 6 -> Generate 1 Vertical Stacked Column Chart (type="col")
+        # Populate chart_worksheet starting at Col 5 to ensure openpyxl binds ONLY active developers (no 0-task clutter)!
+        elif len(eligible_devs) > 6:
+            chart_worksheet.cell(row=1, column=5, value="Developer")
+            chart_worksheet.cell(row=1, column=6, value="To Do")
+            chart_worksheet.cell(row=1, column=7, value="In Progress")
+            chart_worksheet.cell(row=1, column=8, value="Done")
+
+            str_vals = []
+            for d_idx, dev in enumerate(eligible_devs, 2):
+                dev_name = str(dev.get("name", f"Dev {d_idx-1}")).strip()
+                chart_worksheet.cell(row=d_idx, column=5, value=dev_name)
+                chart_worksheet.cell(row=d_idx, column=6, value=int(dev.get("todo", 0)))
+                chart_worksheet.cell(row=d_idx, column=7, value=int(dev.get("in_progress", 0)))
+                chart_worksheet.cell(row=d_idx, column=8, value=int(dev.get("done", 0)))
+                str_vals.append(StrVal(d_idx - 2, v=dev_name))
+
+            num_devs = len(eligible_devs)
+            data_ref_bar = Reference(chart_worksheet, min_col=6, min_row=1, max_col=8, max_row=1 + num_devs)
+
+            chart_bar = BarChart()
+            chart_bar.type = "col"  # Vertical column chart as explicitly requested by user!
+            chart_bar.style = 10
+            chart_bar.grouping = "stacked"
+            chart_bar.overlap = 100
+            chart_bar.title = "Perbandingan Progres Subtask per Developer"
+            chart_bar.y_axis.title = "Jumlah Subtask"
+
+            chart_bar.add_data(data_ref_bar, titles_from_data=True)
+
+            # Build strCache explicitly so Excel immediately renders every developer name!
+            str_cache = StrData(pt=str_vals)
+            sqref_str = f"'{chart_worksheet.title}'!$E$2:$E${1 + num_devs}"
+            for s in chart_bar.series:
+                s.cat = AxDataSource(strRef=StrRef(f=sqref_str, strCache=str_cache))
+
+            # Rotate X-axis labels diagonally -45 deg and force display of every label
+            chart_bar.x_axis.tickLblSkip = 1
+            chart_bar.x_axis.textRotation = -45
+
+            chart_bar.height = 14
+            chart_bar.width = max(28, int(num_devs * 2.2))
+            worksheet.add_chart(chart_bar, "Q6")
+            max_chart_bottom_row = max(max_chart_bottom_row, 22)
+
+        return max_chart_bottom_row
 
     def _render_story_progress_section(
         self,
@@ -639,7 +850,7 @@ class ExcelReporter:
                 cell_sub_role.font = theme.FONT_SUBTASK_ROLE
                 cell_sub_role.alignment = Alignment(horizontal="center", vertical="center")
 
-                cell_sub_sp = worksheet.cell(row=current_row, column=7, value=sub.get("story_points") or "-")
+                cell_sub_sp = worksheet.cell(row=current_row, column=7, value="-")
                 cell_sub_sp.font = theme.FONT_SUBTASK_INDENT
                 cell_sub_sp.alignment = Alignment(horizontal="center", vertical="center")
 
@@ -713,36 +924,33 @@ class ExcelReporter:
     def _render_story_progress_chart(
         self,
         worksheet: Worksheet,
+        chart_worksheet: Worksheet,
         active_chart_stories: List[Dict[str, Any]],
         chart_start_row: int,
     ) -> None:
-        """Renders the Adaptive Horizontal Stacked Bar Chart for Story Completion."""
+        """Renders the Adaptive Horizontal Stacked Bar Chart for Story Completion using chart_worksheet."""
         if not active_chart_stories:
             return
 
-        helper_start_row = 300
-        for clear_r in range(300, 330):
-            for clear_c in range(1, 5):
-                worksheet.cell(row=clear_r, column=clear_c, value=None)
-
-        worksheet.cell(row=helper_start_row, column=1, value="Story Induk")
-        worksheet.cell(row=helper_start_row, column=2, value="Done")
-        worksheet.cell(row=helper_start_row, column=3, value="In Progress")
-        worksheet.cell(row=helper_start_row, column=4, value="To Do")
+        # Write story data in chart_worksheet columns 13..16 (M..P)
+        chart_worksheet.cell(row=1, column=13, value="Story Induk")
+        chart_worksheet.cell(row=1, column=14, value="Done")
+        chart_worksheet.cell(row=1, column=15, value="In Progress")
+        chart_worksheet.cell(row=1, column=16, value="To Do")
 
         for story_idx, story_item in enumerate(active_chart_stories, 1):
-            target_row = helper_start_row + story_idx
+            target_row = 1 + story_idx
             story_key = str(story_item.get("key") or "").strip()
             story_summary = str(story_item.get("summary") or "").strip()
             
             # Multi-line label: Key on line 1, Full Summary on line 2
             label_text = f"[{story_key}]\n{story_summary}" if story_summary else (story_key or f"Story {story_idx}")
 
-            cell_lbl = worksheet.cell(row=target_row, column=1, value=label_text)
+            cell_lbl = chart_worksheet.cell(row=target_row, column=13, value=label_text)
             cell_lbl.number_format = '@'
-            worksheet.cell(row=target_row, column=2, value=int(story_item.get("done", 0)))
-            worksheet.cell(row=target_row, column=3, value=int(story_item.get("in_progress", 0)))
-            worksheet.cell(row=target_row, column=4, value=int(story_item.get("todo", 0)))
+            chart_worksheet.cell(row=target_row, column=14, value=int(story_item.get("done", 0)))
+            chart_worksheet.cell(row=target_row, column=15, value=int(story_item.get("in_progress", 0)))
+            chart_worksheet.cell(row=target_row, column=16, value=int(story_item.get("todo", 0)))
 
         chart_story = BarChart()
         chart_story.type = "bar"
@@ -758,11 +966,16 @@ class ExcelReporter:
         chart_story.x_axis.tickMarkSkip = 1
         chart_story.x_axis.delete = False
         chart_story.x_axis.title = None
+        # Reverse category axis: Excel horizontal bar charts render items bottom-to-top by default.
+        # Setting orientation="maxMin" flips this so the FIRST story in data appears at TOP,
+        # matching the same order as the "Progress Per Parent Story/EPIC" table above.
+        chart_story.x_axis.scaling.orientation = "maxMin"
 
-        # Bottom Value Axis
+        # Bottom Value Axis (also cross at max to keep labels on left when axis is reversed)
         chart_story.y_axis.axPos = "b"
         chart_story.y_axis.title = "Jumlah Subtask"
         chart_story.y_axis.delete = False
+        chart_story.y_axis.crosses = "max"
 
         chart_story.legend.legendPos = "r"
 
@@ -771,9 +984,10 @@ class ExcelReporter:
         chart_story.dataLabels.showCatName = False
         chart_story.dataLabels.showSerName = False
         chart_story.dataLabels.showPercent = False
+        chart_story.dataLabels.showLegendKey = False
 
-        data_ref = Reference(worksheet, min_col=2, max_col=4, min_row=helper_start_row, max_row=helper_start_row + len(active_chart_stories))
-        cats_ref = Reference(worksheet, min_col=1, min_row=helper_start_row + 1, max_row=helper_start_row + len(active_chart_stories))
+        data_ref = Reference(chart_worksheet, min_col=14, max_col=16, min_row=1, max_row=1 + len(active_chart_stories))
+        cats_ref = Reference(chart_worksheet, min_col=13, min_row=2, max_row=1 + len(active_chart_stories))
 
         chart_story.add_data(data_ref, titles_from_data=True)
         chart_story.set_categories(cats_ref)
@@ -902,6 +1116,11 @@ class ExcelReporter:
             if len(group_subtasks) > 1:
                 worksheet.merge_cells(start_row=start_group_row, start_column=6, end_row=end_group_row, end_column=6)
                 worksheet.merge_cells(start_row=start_group_row, start_column=7, end_row=end_group_row, end_column=7)
+            else:
+                # If only 1 subtask, adjust row height so long Story Induk title doesn't overlap
+                max_text_len = max(len(group_subtasks[0].get("summary", "")), len(parent_summary))
+                est_lines = max(1, (max_text_len + 35) // 40)
+                worksheet.row_dimensions[start_group_row].height = max(26, est_lines * 18)
 
             cell_parent_key = worksheet.cell(row=start_group_row, column=6)
             cell_parent_key.value = f'=HYPERLINK("{parent_url}", "{parent_key}")' if parent_key and parent_key != "Other" else "-"
@@ -920,10 +1139,11 @@ class ExcelReporter:
     def _render_role_distribution_chart(
         self,
         worksheet: Worksheet,
+        chart_worksheet: Worksheet,
         detailed_subtasks: List[Dict[str, Any]],
         start_row: int,
     ) -> None:
-        """Renders the Role Breakdown Doughnut Chart."""
+        """Renders the Role Breakdown Doughnut Chart using chart_worksheet."""
         if not detailed_subtasks:
             return
 
@@ -934,15 +1154,14 @@ class ExcelReporter:
                 role_name = "General / Other"
             role_counts[role_name] = role_counts.get(role_name, 0) + 1
 
-        helper_start_row = 330
-        worksheet.cell(row=helper_start_row, column=1, value="Role")
-        worksheet.cell(row=helper_start_row, column=2, value="Jumlah")
+        chart_worksheet.cell(row=1, column=18, value="Role")
+        chart_worksheet.cell(row=1, column=19, value="Jumlah")
 
         role_idx = 1
         for role_name, count in sorted(role_counts.items(), key=lambda x: x[1], reverse=True):
-            curr_row = helper_start_row + role_idx
-            worksheet.cell(row=curr_row, column=1, value=role_name)
-            worksheet.cell(row=curr_row, column=2, value=count)
+            curr_row = 1 + role_idx
+            chart_worksheet.cell(row=curr_row, column=18, value=role_name)
+            chart_worksheet.cell(row=curr_row, column=19, value=count)
             role_idx += 1
 
         chart_role = DoughnutChart()
@@ -954,9 +1173,11 @@ class ExcelReporter:
         chart_role.dataLabels.showVal = False
         chart_role.dataLabels.showCatName = False
         chart_role.dataLabels.showSerName = False
+        chart_role.dataLabels.showLegendKey = False
+        chart_role.dataLabels.numFmt = "0%"
 
-        data_ref = Reference(worksheet, min_col=2, min_row=helper_start_row, max_row=helper_start_row + len(role_counts))
-        cats_ref = Reference(worksheet, min_col=1, min_row=helper_start_row + 1, max_row=helper_start_row + len(role_counts))
+        data_ref = Reference(chart_worksheet, min_col=19, min_row=1, max_row=1 + len(role_counts))
+        cats_ref = Reference(chart_worksheet, min_col=18, min_row=2, max_row=1 + len(role_counts))
 
         chart_role.add_data(data_ref, titles_from_data=True)
         chart_role.set_categories(cats_ref)
@@ -974,7 +1195,7 @@ class ExcelReporter:
             4: 26,  # Assignee (Developer)
             5: 16,  # Role
             6: 18,  # Key Parent
-            7: 42,  # Story Induk
+            7: 54,  # Story Induk
             8: 16,  # Status / % Selesai
         }
         for col in worksheet.columns:
@@ -993,17 +1214,20 @@ class ExcelReporter:
         output_path: str,
         filename: str,
     ) -> str:
-        """Saves workbook safely with a timestamped fallback if file is locked by Excel."""
+        """Saves workbook safely with a timestamped fallback if file is locked by Excel.
+        Returns the full absolute path of the saved file."""
         try:
             workbook.save(full_path)
-            return filename
+            return full_path  # Return full path so callers can display structured folder location
         except PermissionError:
             import time
-            fallback_filename = f"Laporan_Progress_{safe_key}_update_{int(time.time())}.xlsx"
-            fallback_path = os.path.join(output_path, fallback_filename)
+            prof_name = self._get_professional_filename(safe_key)
+            today_str = datetime.datetime.now().strftime("%d-%m-%Y")
+            fallback_filename = f"Laporan_Progress_{prof_name}_{today_str}_update_{int(time.time())}.xlsx"
+            fallback_path = os.path.join(os.path.dirname(full_path), fallback_filename)
             workbook.save(fallback_path)
-            print(f"Peringatan: File '{filename}' sedang dibuka di Microsoft Excel. Hasil baru disimpan sebagai: '{fallback_filename}'")
-            return fallback_filename
+            print(f"Peringatan: File '{filename}' sedang dibuka di Microsoft Excel. Hasil baru disimpan sebagai: '{fallback_path}'")
+            return fallback_path
 
     # =========================================================================
     # BACKWARDS COMPATIBILITY

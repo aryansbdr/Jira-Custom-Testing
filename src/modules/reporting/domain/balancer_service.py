@@ -14,6 +14,8 @@ class WorkloadBalancerService:
     ) -> Dict[str, Any]:
         def _normalize_role(r_str: str) -> str:
             s = str(r_str or "").strip().lower()
+            if "msc" in s or "mcs" in s or "mobile back" in s:
+                return "be"
             if "back" in s or s == "be":
                 return "be"
             if "front" in s or "web" in s or s == "fe":
@@ -50,7 +52,29 @@ class WorkloadBalancerService:
         # Guarantees that ALL subtasks under 1 Story for 1 role go to the SAME person
         role_parent_blocks = {}
         for sub in subtasks:
-            mapped_role_norm = _normalize_role(sub.role)
+            summary_lower = (sub.summary or "").strip().lower()
+            
+            # Explicit override: MSC / MCS / Mobile Backend / Backend Services ALWAYS go to BE
+            if (
+                summary_lower.startswith("msc -") or
+                summary_lower.startswith("[msc") or
+                summary_lower.startswith("mcs -") or
+                summary_lower.startswith("[mcs") or
+                summary_lower.startswith("be -") or
+                summary_lower.startswith("[be") or
+                "create service" in summary_lower or
+                "create new service" in summary_lower or
+                "endpoint" in summary_lower or
+                "api " in summary_lower
+            ):
+                sub.role = "backend"
+                mapped_role_norm = "be"
+            elif summary_lower.startswith("mobile -") or summary_lower.startswith("[mobile"):
+                sub.role = "mobile"
+                mapped_role_norm = "mobile"
+            else:
+                mapped_role_norm = _normalize_role(sub.role)
+
             pkey = getattr(sub, "parent_key", None) or "GENERAL"
             
             key = (mapped_role_norm, pkey)
