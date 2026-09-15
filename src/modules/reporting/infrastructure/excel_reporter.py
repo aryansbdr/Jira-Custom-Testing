@@ -1,6 +1,7 @@
 import openpyxl
 from openpyxl.chart import BarChart, PieChart, Reference
 from openpyxl.chart.label import DataLabelList
+from openpyxl.chart.series import SeriesLabel
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import os
 import datetime
@@ -252,16 +253,19 @@ class ExcelReporter:
     
         chart_max_row = 9 + len(active_members) - 1 if len(active_members) > 0 else tot_member_row - 1
 
-        # 1. NATIVE CLUSTERED BAR CHART (Placed at J7)
+        # 1. NATIVE STACKED COLUMN CHART (Placed at J7)
         if len(active_members) > 0:
             chart_bar = BarChart()
             chart_bar.type = "col"
+            chart_bar.grouping = "stacked"
+            chart_bar.overlap = 100
             chart_bar.style = 10
             chart_bar.title = "Distribusi Status Subtask per Developer"
             chart_bar.y_axis.title = "Jumlah Subtask"
 
-            # Legend at right side (never collides with title!)
-            chart_bar.legend.legendPos = "r"
+            # Legend at bottom outside plot area (never collides with title or bars!)
+            chart_bar.legend.legendPos = "b"
+            chart_bar.legend.overlay = False
 
             # Sumbu X: explicitly show developer names at bottom
             chart_bar.x_axis.tickLblPos = "low"
@@ -280,8 +284,15 @@ class ExcelReporter:
 
             chart_bar.add_data(data_ref, titles_from_data=True)
             chart_bar.set_categories(cats_ref)
-            chart_bar.height = 13
-            chart_bar.width = 18
+
+            # Explicit series titles to avoid Excel auto-concatenating C5 ("5") + C8 ("To Do") -> "5To Do"
+            status_labels = ["To Do", "In Progress", "Done"]
+            for i, s_name in enumerate(status_labels):
+                if i < len(chart_bar.series):
+                    chart_bar.series[i].title = SeriesLabel(v=s_name)
+
+            chart_bar.height = 14
+            chart_bar.width = 20
 
             ws.add_chart(chart_bar, "J7")
 
