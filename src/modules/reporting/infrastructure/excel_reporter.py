@@ -499,6 +499,63 @@ class ExcelReporter:
                 cell_obj.alignment = Alignment(horizontal="right", vertical="center")
         ws.row_dimensions[tot_story_row].height = 22
 
+        # 3. NATIVE HORIZONTAL STACKED BAR CHART FOR PARENT STORIES (Placed beside Section 2 at J{sec2_start})
+        if len(stories_data) > 0:
+            story_chart_start = 270
+            ws.cell(row=story_chart_start, column=1, value="Story")
+            ws.cell(row=story_chart_start, column=2, value="To Do")
+            ws.cell(row=story_chart_start, column=3, value="In Progress")
+            ws.cell(row=story_chart_start, column=4, value="Done")
+
+            for s_idx, st in enumerate(stories_data, start=1):
+                cur_chart_r = story_chart_start + s_idx
+                p_key = st.get("key", "")
+                p_sum = st.get("summary", "")
+                label = f"{p_key}: {p_sum[:32]}..." if len(p_sum) > 32 else f"{p_key}: {p_sum}" if p_sum else p_key
+
+                ws.cell(row=cur_chart_r, column=1, value=label)
+                p_row_idx = parent_rows_list[s_idx - 1] if s_idx - 1 < len(parent_rows_list) else None
+                if p_row_idx:
+                    ws.cell(row=cur_chart_r, column=2, value=f"=D{p_row_idx}")
+                    ws.cell(row=cur_chart_r, column=3, value=f"=E{p_row_idx}")
+                    ws.cell(row=cur_chart_r, column=4, value=f"=F{p_row_idx}")
+                else:
+                    ws.cell(row=cur_chart_r, column=2, value=st.get("todo", 0))
+                    ws.cell(row=cur_chart_r, column=3, value=st.get("in_progress", 0))
+                    ws.cell(row=cur_chart_r, column=4, value=st.get("done", 0))
+
+            max_story_chart_r = story_chart_start + len(stories_data)
+
+            chart_story = BarChart()
+            chart_story.type = "bar"
+            chart_story.grouping = "stacked"
+            chart_story.overlap = 100
+            chart_story.style = 10
+            chart_story.title = "Progress Subtask per Parent Story / Epic"
+            chart_story.x_axis.title = "Jumlah Subtask"
+
+            chart_story.legend.legendPos = "b"
+            chart_story.legend.overlay = False
+
+            chart_story.dataLabels = DataLabelList()
+            chart_story.dataLabels.showVal = True
+
+            story_data_ref = Reference(ws, min_col=2, max_col=4, min_row=story_chart_start, max_row=max_story_chart_r)
+            story_cats_ref = Reference(ws, min_col=1, min_row=story_chart_start + 1, max_row=max_story_chart_r)
+
+            chart_story.add_data(story_data_ref, titles_from_data=True)
+            chart_story.set_categories(story_cats_ref)
+
+            status_names = ["To Do", "In Progress", "Done"]
+            for i, s_name in enumerate(status_names):
+                if i < len(chart_story.series):
+                    chart_story.series[i].title = SeriesLabel(v=s_name)
+
+            chart_story.height = max(12, min(24, int(4 + len(stories_data) * 1.3)))
+            chart_story.width = 20
+
+            ws.add_chart(chart_story, f"J{sec2_start}")
+
         # -------------------------------------------------------------
         # SECTION 3: RINCIAN SELURUH SUBTASK JIRA (Below Section 2 - No SP)
         # -------------------------------------------------------------
