@@ -328,18 +328,21 @@ class ExcelReporter:
         ws.add_chart(chart_pie, "U7")
 
         # -------------------------------------------------------------
-        # SECTION 2: PROGRESS PER PARENT STORY / EPIC (Below Section 1)
+        # SECTION 2: PROGRESS PER PARENT STORY / EPIC (With Grouped Subtasks)
         # -------------------------------------------------------------
         sec2_start = max(tot_member_row + 3, 26)
-        ws.cell(row=sec2_start, column=1, value="2. PROGRESS PER PARENT STORY / EPIC").font = font_section_title
+        ws.cell(row=sec2_start, column=1, value="2. PROGRESS PER PARENT STORY & RINCIAN SUBTASK").font = font_section_title
         ws.row_dimensions[sec2_start].height = 22
 
+        ws.sheet_properties.outlinePr.summaryBelow = True
+        ws.sheet_properties.outlinePr.applyStyles = True
+
         story_headers = [
-            "Key Story (Link)",
-            "Judul Story Induk",
-            "Owner",
-            "To Do",
-            "In Progress",
+            "Key Story / Subtask",
+            "Judul Story Induk / Subtask",
+            "Owner / Assignee",
+            "Role / To Do",
+            "Status / In Progress",
             "Done",
             "Total Subtask",
             "% Selesai",
@@ -354,34 +357,48 @@ class ExcelReporter:
         ws.row_dimensions[sec2_header_row].height = 22
 
         stories_data = report_data.get("story_progress", [])
+        detailed_subtasks = report_data.get("detailed_subtasks", [])
+
+        # Build parent -> subtask mapping fallback if story['subtasks'] is empty
+        parent_subtasks_map = {}
+        for sub in detailed_subtasks:
+            pk = sub.get("parent_key")
+            if pk:
+                if pk not in parent_subtasks_map:
+                    parent_subtasks_map[pk] = []
+                parent_subtasks_map[pk].append(sub)
+
         s_row = sec2_header_row + 1
+        parent_rows_list = []
+
         for idx, st in enumerate(stories_data):
-            row_fill = fill_zebra if idx % 2 == 1 else PatternFill(fill_type=None)
             p_key = st.get("key", "")
             jira_link = f"{base_jira_url}/browse/{p_key}"
+            p_row = s_row
+            parent_rows_list.append(p_row)
 
-            c_key = ws.cell(row=s_row, column=1)
+            c_key = ws.cell(row=p_row, column=1)
             c_key.value = f'=HYPERLINK("{jira_link}", "{p_key}")' if p_key else "-"
-            c_key.font = font_link
+            c_key.font = font_bold
             c_key.alignment = Alignment(horizontal="center", vertical="center")
 
-            c_sum = ws.cell(row=s_row, column=2, value=st.get("summary", ""))
-            c_sum.font = font_data
+            c_sum = ws.cell(row=p_row, column=2, value=st.get("summary", ""))
+            c_sum.font = font_bold
             c_sum.alignment = Alignment(horizontal="left", vertical="center")
 
-            c_own = ws.cell(row=s_row, column=3, value=st.get("owner", "-"))
+            c_own = ws.cell(row=p_row, column=3, value=st.get("owner", "-"))
             c_own.font = font_bold if st.get("owner") not in ("-", "Unassigned") else font_data
             c_own.alignment = Alignment(horizontal="center", vertical="center")
 
-            c_todo = ws.cell(row=s_row, column=4, value=st.get("todo", 0))
-            c_prog = ws.cell(row=s_row, column=5, value=st.get("in_progress", 0))
-            c_done = ws.cell(row=s_row, column=6, value=st.get("done", 0))
-            c_tot  = ws.cell(row=s_row, column=7, value=f"=SUM(D{s_row}:F{s_row})")
-            c_pct  = ws.cell(row=s_row, column=8, value=f'=IF(G{s_row}=0, 0, F{s_row}/G{s_row})')
+            c_todo = ws.cell(row=p_row, column=4, value=st.get("todo", 0))
+            c_prog = ws.cell(row=p_row, column=5, value=st.get("in_progress", 0))
+            c_done = ws.cell(row=p_row, column=6, value=st.get("done", 0))
+            c_tot  = ws.cell(row=p_row, column=7, value=f"=SUM(D{p_row}:F{p_row})")
+            c_pct  = ws.cell(row=p_row, column=8, value=f'=IF(G{p_row}=0, 0, F{p_row}/G{p_row})')
 
-            c_todo.font = font_data
-            c_prog.font = font_data
-            c_done.font = font_data
+            c_todo.font = font_bold
+            c_prog.font = font_bold
+            c_done.font = font_bold
             c_tot.font = font_bold
             c_pct.font = font_bold
 
@@ -390,27 +407,85 @@ class ExcelReporter:
             c_done.alignment = Alignment(horizontal="right", vertical="center")
             c_tot.alignment  = Alignment(horizontal="right", vertical="center")
             c_pct.alignment  = Alignment(horizontal="right", vertical="center")
-
             c_pct.number_format = "0.0%"
 
             for c in range(1, 9):
-                cell_obj = ws.cell(row=s_row, column=c)
+                cell_obj = ws.cell(row=p_row, column=c)
                 cell_obj.border = thin_border
-                if row_fill.fill_type:
-                    cell_obj.fill = row_fill
+                cell_obj.fill = fill_total
 
-            ws.row_dimensions[s_row].height = 20
+            ws.row_dimensions[p_row].height = 22
             s_row += 1
+
+            # Render Child Subtasks under this Parent Story
+            child_subs = st.get("subtasks") or parent_subtasks_map.get(p_key, [])
+            for sub in child_subs:
+                sub_row = s_row
+                ws.row_dimensions[sub_row].outlineLevel = 1
+
+                sub_key = sub.get("key", "")
+                sub_url = sub.get("url") or f"{base_jira_url}/browse/{sub_key}"
+
+                c_skey = ws.cell(row=sub_row, column=1)
+                c_skey.value = f'=HYPERLINK("{sub_url}", "  ↳ {sub_key}")' if sub_key else "-"
+                c_skey.font = font_link
+                c_skey.alignment = Alignment(horizontal="left", vertical="center")
+
+                c_ssum = ws.cell(row=sub_row, column=2, value=sub.get("summary", ""))
+                c_ssum.font = font_data
+                c_ssum.alignment = Alignment(horizontal="left", vertical="center")
+
+                c_sassign = ws.cell(row=sub_row, column=3, value=sub.get("assignee", "Unassigned"))
+                c_sassign.font = font_data
+                c_sassign.alignment = Alignment(horizontal="center", vertical="center")
+
+                c_srole = ws.cell(row=sub_row, column=4, value=sub.get("role", "Backend"))
+                c_srole.font = font_data
+                c_srole.alignment = Alignment(horizontal="center", vertical="center")
+
+                s_status = str(sub.get("status", "To Do"))
+                c_sstatus = ws.cell(row=sub_row, column=5, value=s_status)
+                s_stat_lower = s_status.lower()
+                if any(k in s_stat_lower for k in ("done", "closed", "resolved", "verified", "complete", "selesai")):
+                    c_sstatus.fill = fill_status_done
+                    c_sstatus.font = font_status_done
+                elif any(k in s_stat_lower for k in ("to do", "todo", "open", "backlog")):
+                    c_sstatus.fill = fill_status_todo
+                    c_sstatus.font = font_status_todo
+                else:
+                    c_sstatus.fill = fill_status_prog
+                    c_sstatus.font = font_status_prog
+                c_sstatus.alignment = Alignment(horizontal="center", vertical="center")
+
+                for c in range(6, 9):
+                    c_empty = ws.cell(row=sub_row, column=c, value="-")
+                    c_empty.font = font_data
+                    c_empty.alignment = Alignment(horizontal="center", vertical="center")
+
+                for c in range(1, 9):
+                    ws.cell(row=sub_row, column=c).border = thin_border
+
+                ws.row_dimensions[sub_row].height = 19
+                s_row += 1
 
         # Story Total Row
         tot_story_row = s_row
-        ws.cell(row=tot_story_row, column=1, value="Total").font = font_bold
+        ws.cell(row=tot_story_row, column=1, value="Total Akumulasi Story").font = font_bold
         ws.cell(row=tot_story_row, column=2, value="").font = font_bold
         ws.cell(row=tot_story_row, column=3, value="").font = font_bold
-        ws.cell(row=tot_story_row, column=4, value=f"=SUM(D{sec2_header_row+1}:D{tot_story_row-1})").font = font_bold
-        ws.cell(row=tot_story_row, column=5, value=f"=SUM(E{sec2_header_row+1}:E{tot_story_row-1})").font = font_bold
-        ws.cell(row=tot_story_row, column=6, value=f"=SUM(F{sec2_header_row+1}:F{tot_story_row-1})").font = font_bold
-        ws.cell(row=tot_story_row, column=7, value=f"=SUM(G{sec2_header_row+1}:G{tot_story_row-1})").font = font_bold
+
+        if parent_rows_list:
+            p_todo_fmt = "+".join([f"D{r}" for r in parent_rows_list])
+            p_prog_fmt = "+".join([f"E{r}" for r in parent_rows_list])
+            p_done_fmt = "+".join([f"F{r}" for r in parent_rows_list])
+            p_tot_fmt  = "+".join([f"G{r}" for r in parent_rows_list])
+            ws.cell(row=tot_story_row, column=4, value=f"={p_todo_fmt}").font = font_bold
+            ws.cell(row=tot_story_row, column=5, value=f"={p_prog_fmt}").font = font_bold
+            ws.cell(row=tot_story_row, column=6, value=f"={p_done_fmt}").font = font_bold
+            ws.cell(row=tot_story_row, column=7, value=f"={p_tot_fmt}").font = font_bold
+        else:
+            for c in range(4, 8):
+                ws.cell(row=tot_story_row, column=c, value=0).font = font_bold
 
         c_pct_s_tot = ws.cell(row=tot_story_row, column=8, value=f'=IF(G{tot_story_row}=0, 0, F{tot_story_row}/G{tot_story_row})')
         c_pct_s_tot.font = font_bold
