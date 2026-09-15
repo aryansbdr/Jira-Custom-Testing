@@ -100,8 +100,53 @@ def _compute_overall_status(subtasks: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _build_member_progress_summary(subtasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Aggregates subtasks per developer into structured progress summaries."""
+def _get_master_member_roles() -> Dict[str, str]:
+    roles = {
+        "maulana": "Frontend",
+        "maulana aryan": "Frontend",
+        "maulana aryan wicaksana sabandar": "Frontend",
+        "sindu": "Backend",
+        "sindu sanova": "Backend",
+        "habibi": "Backend",
+        "muhammad habibi": "Backend",
+        "danar": "Frontend",
+        "marko": "SAD",
+        "sukro": "Mobile",
+    }
+    if os.path.exists("Members.xlsx"):
+        try:
+            import pandas as pd
+            df = pd.read_excel("Members.xlsx")
+            for _, row in df.iterrows():
+                name = str(row.get("Nama", "") or "").strip()
+                role = str(row.get("Role", "") or "").strip()
+                if name and role and role.lower() != "nan":
+                    name_lower = name.lower()
+                    roles[name_lower] = role
+                    for part in name_lower.split():
+                        if len(part) > 2:
+                            roles[part] = role
+        except Exception as e:
+            print(f"Warning loading Members.xlsx roles: {e}")
+    return roles
+
+
+def _build_member_progress_summary(
+    subtasks: List[Dict[str, Any]], master_member_list: List[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
+    """Aggregates subtasks per developer into structured progress summaries with official master roles."""
+    master_roles = _get_master_member_roles()
+
+    if master_member_list:
+        for m in master_member_list:
+            m_name = str(m.get("name", "")).strip().lower()
+            m_role = str(m.get("role", "")).strip()
+            if m_name and m_role:
+                master_roles[m_name] = m_role
+                for part in m_name.split():
+                    if len(part) > 2:
+                        master_roles[part] = m_role
+
     member_map: Dict[str, Dict[str, Any]] = {}
 
     for sub in subtasks:
@@ -110,9 +155,19 @@ def _build_member_progress_summary(subtasks: List[Dict[str, Any]]) -> List[Dict[
             continue
 
         if assignee not in member_map:
+            assignee_lower = assignee.lower()
+            dev_role = master_roles.get(assignee_lower)
+            if not dev_role:
+                for key, r_val in master_roles.items():
+                    if key in assignee_lower or assignee_lower in key:
+                        dev_role = r_val
+                        break
+            if not dev_role:
+                dev_role = sub.get("role", "Backend")
+
             member_map[assignee] = {
                 "name": assignee,
-                "role": sub.get("role", "Developer"),
+                "role": dev_role,
                 "todo": 0,
                 "in_progress": 0,
                 "done": 0,
