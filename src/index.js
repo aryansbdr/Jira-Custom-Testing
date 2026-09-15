@@ -56,6 +56,18 @@ function normalizeCategory(role) {
     .toLowerCase();
 
   if (
+    value === 'msc' ||
+    value === 'mcs' ||
+    value === 'mobile backend' ||
+    value === 'backend' ||
+    value === 'back-end' ||
+    value === 'back end' ||
+    value === 'be'
+  ) {
+    return 'Backend';
+  }
+
+  if (
     value === 'frontend' ||
     value === 'front-end' ||
     value === 'front end' ||
@@ -66,11 +78,13 @@ function normalizeCategory(role) {
   }
 
   if (
+    value === 'msc' ||
+    value === 'mcs' ||
+    value === 'mobile backend' ||
     value === 'backend' ||
     value === 'back-end' ||
     value === 'back end' ||
-    value === 'be' ||
-    value === 'mcs' 
+    value === 'be'
   ) {
     return 'Backend';
   }
@@ -113,12 +127,19 @@ function extractSquadName(summary = '', assigneeName = '') {
   }
   const match = text.match(/^\[(.*?)\]/);
   if (match && match[1]) {
-    return normalizeCategory(match[1].trim());
+    const bracketVal = match[1].trim().toLowerCase();
+    if (bracketVal.includes('msc') || bracketVal.includes('mcs')) {
+      return 'Backend';
+    }
+    return normalizeCategory(bracketVal);
   }
   if (
     /\b(system design|design system|dokumen utama|product backlog|iad|bmc|sprint plan|service dependency|security review|risk register|risk management|user manual|user sign-off|architecture|sad|it control checklist|sprint retrospective|summary design|dokumen pengembangan)\b/i.test(text)
   ) {
     return 'SAD';
+  }
+  if (/^(?:\[\s*(msc|mcs)\s*\]|(msc|mcs)\s*[-:])/i.test(text) || /\b(msc|mcs)\b/i.test(text)) {
+    return 'Backend';
   }
   if (/^mobile/i.test(text) || /\bmobile\b/i.test(text) || /^mob\b/i.test(text)) {
     return 'Mobile';
@@ -199,17 +220,49 @@ function normalizeTask(task, index, category, parentKey = '', existingSubtasks =
   // Jika AI mengembalikan object
   // ----------------------------------------
 
-  const summary =
+  const rawSummary = String(
     task?.summary ||
     task?.text ||
     task?.title ||
     task?.name ||
     task?.task ||
-    '';
+    ''
+  ).trim();
 
   const description =
     task?.description ||
-    summary;
+    rawSummary;
+
+  const targetCategory = (category || task?.role || task?.category || 'backend').toLowerCase();
+
+  let cleanBody = rawSummary
+    .replace(/^((be|web|fe|webapp|mobile|msc|mcs)\s*-\s*)+/i, '')
+    .replace(/^\[(Mobile|WEB|FE|MSC|MCS|BE)[^\]]*\]\s*/i, '')
+    .trim();
+
+  let finalSummary = rawSummary;
+
+  if (targetCategory === 'backend' || targetCategory === 'msc') {
+    if (rawSummary.startsWith('[MSC Pemutus]')) {
+      finalSummary = `[MSC Pemutus] ${cleanBody}`;
+    } else if (rawSummary.startsWith('[MSC Prakarsa]') || rawSummary.startsWith('[MSC Pemrakarsa]')) {
+      finalSummary = `[MSC Prakarsa] ${cleanBody}`;
+    } else if (/^msc\s*[-:]/i.test(rawSummary) || /^\[msc/i.test(rawSummary)) {
+      finalSummary = `MSC - ${cleanBody}`;
+    } else {
+      finalSummary = `BE - ${cleanBody}`;
+    }
+  } else if (targetCategory === 'mobile') {
+    if (rawSummary.includes('Pemutus')) {
+      finalSummary = `[Mobile Pemutus] ${cleanBody}`;
+    } else if (rawSummary.includes('Pemrakarsa') || rawSummary.includes('Prakarsa')) {
+      finalSummary = `[Mobile Pemrakarsa] ${cleanBody}`;
+    } else {
+      finalSummary = `MOBILE - ${cleanBody}`;
+    }
+  } else if (targetCategory === 'web' || targetCategory === 'frontend') {
+    finalSummary = `WEB - ${cleanBody}`;
+  }
 
   return {
     id:
@@ -217,16 +270,13 @@ function normalizeTask(task, index, category, parentKey = '', existingSubtasks =
       task?.key ??
       generatedId,
 
-    text: String(summary).trim(),
+    text: finalSummary,
 
-    summary: String(summary).trim(),
+    summary: finalSummary,
 
     description: String(description).trim(),
 
-    role:
-      task?.role ||
-      task?.category ||
-      category.toLowerCase(),
+    role: targetCategory,
 
     assigneeName:
       task?.assigneeName ||
@@ -641,6 +691,15 @@ function convertSubtasksToGroups(subtasks) {
         'backend';
     }
 
+    const taskSummary = String(rawTask.summary || rawTask.text || rawTask.title || '').trim();
+    if (
+      /^(?:\[\s*(msc|mcs)[^\]]*\]|(msc|mcs)\s*[-:])/i.test(taskSummary) ||
+      /\b(msc|mcs)\b/i.test(taskSummary) ||
+      /\b(create new service|create service|service|endpoint|api|fds|migration|db schema|repository|controller|stored procedure|simpan lat long|save lat long|send geotagging|kirimkan pada fds|geotagging data)\b/i.test(taskSummary)
+    ) {
+      role = 'backend';
+    }
+
     const category =
       normalizeCategory(role);
 
@@ -682,6 +741,88 @@ function convertSubtasksToGroups(subtasks) {
 
 
 // ============================================================
+// ============================================================
+// HELPER FOR JIRA JQL SEARCH (COMPATIBLE WITH ATLASSIAN API CHANGE 2046)
+// ============================================================
+
+async function searchJiraIssues(jql, maxResults = 100, fields = ['summary', 'status', 'issuetype', 'assignee', 'parent']) {
+  console.log(`[searchJiraIssues] Querying JQL: ${jql}`);
+  
+  // 1. Try POST /rest/api/3/search/jql (New Atlassian API)
+  try {
+    let res = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jql, maxResults, fields })
+    });
+    if (!res.ok) {
+      res = await api.asApp().requestJira(route`/rest/api/3/search/jql`, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jql, maxResults, fields })
+      });
+    }
+    if (res.ok) {
+      const data = await res.json();
+      console.log(`[searchJiraIssues] POST /rest/api/3/search/jql returned ${data.issues?.length || 0} issues`);
+      return data.issues || [];
+    }
+  } catch (e) {
+    console.warn('[searchJiraIssues] POST /rest/api/3/search/jql error:', e.message);
+  }
+
+  // 2. Fallback: GET /rest/api/3/search?jql=...
+  try {
+    const fieldsParam = encodeURIComponent(fields.join(','));
+    const url = `/rest/api/3/search?jql=${encodeURIComponent(jql)}&maxResults=${maxResults}&fields=${fieldsParam}`;
+    let res = await api.asUser().requestJira(route`${url}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' }
+    });
+    if (!res.ok) {
+      res = await api.asApp().requestJira(route`${url}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' }
+      });
+    }
+    if (res.ok) {
+      const data = await res.json();
+      console.log(`[searchJiraIssues] GET /rest/api/3/search returned ${data.issues?.length || 0} issues`);
+      return data.issues || [];
+    }
+  } catch (e) {
+    console.warn('[searchJiraIssues] GET /rest/api/3/search error:', e.message);
+  }
+
+  // 3. Fallback: POST /rest/api/2/search
+  try {
+    let res = await api.asUser().requestJira(route`/rest/api/2/search`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jql, maxResults, fields })
+    });
+    if (!res.ok) {
+      res = await api.asApp().requestJira(route`/rest/api/2/search`, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jql, maxResults, fields })
+      });
+    }
+    if (res.ok) {
+      const data = await res.json();
+      console.log(`[searchJiraIssues] POST /rest/api/2/search returned ${data.issues?.length || 0} issues`);
+      return data.issues || [];
+    }
+  } catch (e) {
+    console.warn('[searchJiraIssues] POST /rest/api/2/search error:', e.message);
+  }
+
+  console.error('[searchJiraIssues] All search endpoints failed for JQL:', jql);
+  return [];
+}
+
+
+// ============================================================
 // 1. SQUAD PROGRESS REPORT
 // ============================================================
 
@@ -701,59 +842,7 @@ resolver.define(
         jql
       );
 
-
-      const response =
-        await api
-          .asUser()
-          .requestJira(
-            route`/rest/api/3/search/jql`,
-            {
-              method: 'POST',
-
-              headers: {
-                Accept:
-                  'application/json',
-
-                'Content-Type':
-                  'application/json',
-              },
-
-              body:
-                JSON.stringify({
-                  jql,
-
-                  fields: [
-                    'summary',
-                    'status',
-                    'assignee',
-                    'parent',
-                  ],
-                }),
-            }
-          );
-
-
-      if (!response.ok) {
-        console.error(
-          '[Squad Report] Jira error:',
-          await response.text()
-        );
-
-        return {
-          parentIssues: [],
-          squadsList: [],
-          memberDataBySquad: {},
-        };
-      }
-
-
-      const data =
-        await response.json();
-
-      const issues =
-        Array.isArray(data.issues)
-          ? data.issues
-          : [];
+      const issues = await searchJiraIssues(jql, 500, ['summary', 'status', 'assignee', 'parent']);
 
 
       const parentMap = {};
@@ -928,6 +1017,38 @@ resolver.define(
 
 
 // ============================================================
+// 1A2. GET ALL PROJECTS IN JIRA SITE
+// ============================================================
+
+resolver.define('getAllProjects', async () => {
+  try {
+    let response = await api.asUser().requestJira(route`/rest/api/3/project`, {
+      headers: { Accept: 'application/json' }
+    });
+    if (!response.ok) {
+      response = await api.asApp().requestJira(route`/rest/api/3/project`, {
+        headers: { Accept: 'application/json' }
+      });
+    }
+    if (response.ok) {
+      const projects = await response.json();
+      return {
+        projects: (projects || []).map((p) => ({
+          key: p.key,
+          name: p.name,
+          id: p.id
+        }))
+      };
+    }
+    return { projects: [] };
+  } catch (err) {
+    console.error('[getAllProjects] Error:', err);
+    return { projects: [] };
+  }
+});
+
+
+// ============================================================
 // 1B. GET PROJECT EPICS (FOR AGILE REPORTS)
 // ============================================================
 
@@ -936,51 +1057,26 @@ resolver.define('getProjectEpics', async (req) => {
   const cleanProjectKey = String(projectKey || 'JT').trim();
 
   try {
-    const jql = `project = "${cleanProjectKey}" AND (issuetype = "Epic" OR hierarchyLevel = 1) ORDER BY created DESC`;
-    console.log('[getProjectEpics] Executing JQL:', jql);
-
-    let response = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        jql,
-        maxResults: 100,
-        fields: ['summary', 'status', 'issuetype'],
-      }),
-    });
-
-    if (!response.ok) {
-      console.warn(`[getProjectEpics] asUser failed (${response.status}), retrying with asApp...`);
-      response = await api.asApp().requestJira(route`/rest/api/3/search/jql`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          jql,
-          maxResults: 100,
-          fields: ['summary', 'status', 'issuetype'],
-        }),
-      });
+    let issues = [];
+    if (cleanProjectKey) {
+      issues = await searchJiraIssues(`project = "${cleanProjectKey}" AND issuetype = "Epic" ORDER BY created DESC`, 100, ['summary', 'status', 'issuetype']);
+    }
+    if (issues.length === 0 && cleanProjectKey) {
+      console.log(`[getProjectEpics] No Epics found for project ${cleanProjectKey}, searching non-subtask issues...`);
+      issues = await searchJiraIssues(`project = "${cleanProjectKey}" AND issuetype not in subTaskIssueTypes() ORDER BY created DESC`, 50, ['summary', 'status', 'issuetype']);
+    }
+    if (issues.length === 0) {
+      console.log('[getProjectEpics] Project query returned 0 issues, executing global non-subtask issue fallback...');
+      issues = await searchJiraIssues(`issuetype not in subTaskIssueTypes() ORDER BY created DESC`, 50, ['summary', 'status', 'issuetype']);
     }
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`[getProjectEpics] JQL failed: ${response.status} ${errText}`);
-      return { epics: [] };
-    }
-
-    const data = await response.json();
-    const epics = (data.issues || []).map((issue) => ({
+    const epics = issues.map((issue) => ({
       key: issue.key,
       summary: issue.fields?.summary || issue.key,
       status: issue.fields?.status?.name || 'Unknown',
     }));
 
+    console.log(`[getProjectEpics] Found ${epics.length} Epics/Items for project ${cleanProjectKey}`);
     return { epics };
   } catch (err) {
     console.error('[getProjectEpics] Error:', err);
@@ -999,89 +1095,72 @@ resolver.define('getEpicStoryDetails', async (req) => {
     return { stories: [] };
   }
 
-  // Extract clean key, e.g. from "[JT-22] Brispot..." -> "JT-22"
-  const cleanEpicKey = String(epicKey).trim().replace(/^\[|\]$/g, '').split(' ')[0].split('-')[0] + '-' + (String(epicKey).match(/\d+/) ? String(epicKey).match(/\d+/)[0] : '');
-  const targetKey = cleanEpicKey.includes('-') ? cleanEpicKey : String(epicKey).trim();
+  const cleanProjectKey = String(projectKey || 'JT').trim();
+  let isAll = false;
+  let targetKey = String(epicKey).trim();
+
+  if (targetKey.toUpperCase() === 'ALL' || targetKey.toUpperCase() === 'SEMUA') {
+    isAll = true;
+  } else {
+    const match = targetKey.match(/([A-Za-z0-9_]+-\d+)/);
+    if (match) {
+      targetKey = match[1];
+    }
+  }
 
   try {
-    console.log(`[getEpicStoryDetails] Fetching child stories for Epic: ${targetKey}`);
+    console.log(`[getEpicStoryDetails] Fetching child stories for Epic: ${targetKey} (isAll=${isAll})`);
 
     let epicDetails = {
-      key: targetKey,
-      summary: '',
+      key: isAll ? 'ALL' : targetKey,
+      summary: isAll ? 'Semua Story & Task Proyek' : '',
       startDate: '',
       endDate: '',
-      sprintName: '',
+      sprintName: `Sprint Aktif - ${cleanProjectKey}`,
       duedate: '',
       created: ''
     };
 
-    try {
-      let epicRes = await api.asUser().requestJira(route`/rest/api/3/issue/${targetKey}?fields=summary,status,duedate,created,customfield_10020,fixVersions`);
-      if (!epicRes.ok) {
-        epicRes = await api.asApp().requestJira(route`/rest/api/3/issue/${targetKey}?fields=summary,status,duedate,created,customfield_10020,fixVersions`);
-      }
-      if (epicRes.ok) {
-        const epData = await epicRes.json();
-        const f = epData.fields || {};
-        const sprints = Array.isArray(f.customfield_10020) ? f.customfield_10020 : [];
-        const activeSprint = sprints.find((s) => s.state === 'active') || sprints[sprints.length - 1];
-
-        epicDetails.summary = f.summary || '';
-        epicDetails.duedate = f.duedate || '';
-        epicDetails.created = f.created || '';
-
-        if (activeSprint) {
-          epicDetails.sprintName = activeSprint.name || '';
-          epicDetails.startDate = activeSprint.startDate || f.created;
-          epicDetails.endDate = activeSprint.endDate || f.duedate;
-        } else {
-          epicDetails.startDate = f.created || '';
-          epicDetails.endDate = f.duedate || '';
+    if (!isAll) {
+      try {
+        let epicRes = await api.asUser().requestJira(route`/rest/api/3/issue/${targetKey}?fields=summary,status,duedate,created,customfield_10020,fixVersions`);
+        if (!epicRes.ok) {
+          epicRes = await api.asApp().requestJira(route`/rest/api/3/issue/${targetKey}?fields=summary,status,duedate,created,customfield_10020,fixVersions`);
         }
+        if (epicRes.ok) {
+          const epData = await epicRes.json();
+          const f = epData.fields || {};
+          const sprints = Array.isArray(f.customfield_10020) ? f.customfield_10020 : [];
+          const activeSprint = sprints.find((s) => s.state === 'active') || sprints[sprints.length - 1];
+
+          epicDetails.summary = f.summary || '';
+          epicDetails.duedate = f.duedate || '';
+          epicDetails.created = f.created || '';
+
+          if (activeSprint) {
+            epicDetails.sprintName = activeSprint.name || '';
+            epicDetails.startDate = activeSprint.startDate || f.created;
+            epicDetails.endDate = activeSprint.endDate || f.duedate;
+          } else {
+            epicDetails.startDate = f.created || '';
+            epicDetails.endDate = f.duedate || '';
+          }
+        }
+      } catch (eErr) {
+        console.warn('[getEpicStoryDetails] Gagal fetch epic metadata:', eErr);
       }
-    } catch (eErr) {
-      console.warn('[getEpicStoryDetails] Gagal fetch epic metadata:', eErr);
     }
 
-    const storyJql = `(parent = "${targetKey}" OR "Epic Link" = "${targetKey}") ORDER BY key ASC`;
+    const storyJql = isAll
+      ? (cleanProjectKey ? `project = "${cleanProjectKey}" AND issuetype not in subTaskIssueTypes() ORDER BY created DESC` : `issuetype not in subTaskIssueTypes() ORDER BY created DESC`)
+      : `(parent = "${targetKey}" OR "Epic Link" = "${targetKey}") ORDER BY key ASC`;
 
-    let storyRes = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        jql: storyJql,
-        maxResults: 100,
-        fields: ['summary', 'status', 'issuetype'],
-      }),
-    });
+    let rawStories = await searchJiraIssues(storyJql, 100, ['summary', 'status', 'issuetype', 'assignee']);
 
-    if (!storyRes.ok) {
-      console.warn(`[getEpicStoryDetails] asUser search failed (${storyRes.status}), retrying asApp...`);
-      storyRes = await api.asApp().requestJira(route`/rest/api/3/search/jql`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          jql: storyJql,
-          maxResults: 100,
-          fields: ['summary', 'status', 'issuetype'],
-        }),
-      });
+    if (isAll && rawStories.length === 0) {
+      console.log('[getEpicStoryDetails] Retrying site-wide story query fallback...');
+      rawStories = await searchJiraIssues(`issuetype not in subTaskIssueTypes() ORDER BY created DESC`, 100, ['summary', 'status', 'issuetype', 'assignee']);
     }
-
-    if (!storyRes.ok) {
-      console.error('[getEpicStoryDetails] Story query failed:', await storyRes.text());
-      return { stories: [] };
-    }
-
-    const storyData = await storyRes.json();
-    const rawStories = storyData.issues || [];
 
     // Filter out subtasks from direct children (only Stories / Tasks)
     const stories = rawStories.filter((s) => {
@@ -1089,45 +1168,43 @@ resolver.define('getEpicStoryDetails', async (req) => {
       return !typeName.includes('sub-task') && !typeName.includes('subtask') && !s.fields?.issuetype?.subtask;
     });
 
-    if (stories.length === 0) {
-      return { stories: [] };
+    if (stories.length === 0 && !isAll) {
+      console.log(`[getEpicStoryDetails] No child stories found for ${targetKey}, attempting to fetch direct subtasks for ${targetKey}...`);
+      const directSubtasks = await searchJiraIssues(`parent = "${targetKey}" ORDER BY key ASC`, 200, ['summary', 'status', 'parent', 'assignee', 'issuetype']);
+
+      const singleStoryObj = {
+        key: targetKey,
+        summary: epicDetails.summary || targetKey,
+        typeName: 'Story',
+        subtasks: directSubtasks.map((st) => {
+          const summary = st.fields?.summary || st.key;
+          const assigneeName = st.fields?.assignee?.displayName || st.fields?.assignee?.name || 'Unassigned';
+          const role = extractSquadName(summary, assigneeName);
+          return {
+            key: st.key,
+            summary: summary,
+            status: st.fields?.status?.name || 'To Do',
+            role: role,
+            assignee: assigneeName,
+            assigneeName: assigneeName,
+            assigneeAccountId: st.fields?.assignee?.accountId || null,
+            iconUrl: st.fields?.issuetype?.iconUrl || '',
+            typeName: st.fields?.issuetype?.name || 'Sub-task'
+          };
+        })
+      };
+
+      return {
+        epicDetails,
+        stories: [singleStoryObj]
+      };
     }
 
     const storyKeys = stories.map((s) => s.key);
-    const subtaskJql = `parent in (${storyKeys.map((k) => `"${k}"`).join(',')}) ORDER BY key ASC`;
-
-    let subtaskRes = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        jql: subtaskJql,
-        maxResults: 500,
-        fields: ['summary', 'status', 'parent', 'assignee', 'issuetype'],
-      }),
-    });
-
-    if (!subtaskRes.ok) {
-      subtaskRes = await api.asApp().requestJira(route`/rest/api/3/search/jql`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          jql: subtaskJql,
-          maxResults: 500,
-          fields: ['summary', 'status', 'parent', 'assignee', 'issuetype'],
-        }),
-      });
-    }
-
     let subtasks = [];
-    if (subtaskRes.ok) {
-      const subtaskData = await subtaskRes.json();
-      subtasks = subtaskData.issues || [];
+    if (storyKeys.length > 0) {
+      const subtaskJql = `parent in (${storyKeys.map((k) => `"${k}"`).join(',')}) ORDER BY key ASC`;
+      subtasks = await searchJiraIssues(subtaskJql, 500, ['summary', 'status', 'parent', 'assignee', 'issuetype']);
     }
 
     const subtasksByStoryKey = {};
@@ -1190,13 +1267,91 @@ resolver.define('getEpicStoryDetails', async (req) => {
 
 
 // ============================================================
+// HELPER: CLEAN BACKEND ERROR FORMATTER (HUMAN READABLE)
+// ============================================================
+
+function formatBackendErrorMessage(status, rawText) {
+  if (!rawText) {
+    return `[Backend HTTP ${status || 'Unknown'}]: Server tidak memberikan pesan error. Pastikan backend FastAPI (port 8000) dan tunnel aktif.`;
+  }
+
+  const text = String(rawText).trim();
+
+  // 1. Check if JSON with detail / message / error
+  if (text.startsWith('{') || text.startsWith('[')) {
+    try {
+      const errObj = JSON.parse(text);
+      if (errObj.detail) {
+        if (typeof errObj.detail === 'string') return `[Backend Error ${status || 500}]: ${errObj.detail}`;
+        if (Array.isArray(errObj.detail)) {
+          const msgs = errObj.detail.map(d => `${d.loc ? d.loc.join('.') : ''}: ${d.msg}`).join(', ');
+          return `[Validasi Request Error ${status || 422}]: ${msgs}`;
+        }
+        return `[Backend Error ${status || 500}]: ${JSON.stringify(errObj.detail)}`;
+      }
+      if (errObj.error) return `[Backend Error ${status || 500}]: ${errObj.error}`;
+      if (errObj.message) return `[Backend Error ${status || 500}]: ${errObj.message}`;
+    } catch (e) {
+      // not valid json, fall through
+    }
+  }
+
+  // 2. Specific AI / Quota keywords
+  if (text.includes('429') || text.includes('Quota exceeded') || text.includes('RESOURCE_EXHAUSTED')) {
+    return `[Gemini/OpenAI Limit 429]: Kuota AI habis atau rate limit tercapai. Periksa API Key di file D:\\AI\\.env.`;
+  }
+  if (text.includes('403') || text.includes('PERMISSION_DENIED') || text.includes('API_KEY_INVALID')) {
+    return `[AI Authentication Error 403]: API Key tidak valid. Perbarui API Key di file D:\\AI\\.env.`;
+  }
+
+  // 3. Cloudflare Tunnel or Bad Gateway / Proxy Errors
+  if (
+    text.includes('Cloudflare') ||
+    text.includes('trycloudflare.com') ||
+    text.includes('Error 1033') ||
+    text.includes('Error 502') ||
+    text.includes('Error 521') ||
+    text.includes('Bad gateway') ||
+    text.includes('Bad Gateway')
+  ) {
+    return `[Cloudflare Tunnel Error]: Tunnel terputus atau backend lokal mati. Pastikan 'cloudflared' & FastAPI (port 8000) aktif.`;
+  }
+
+  // 4. HTML response (e.g. Proxy 500, Web server 500, Gateway Timeout)
+  if (text.startsWith('<') || text.toLowerCase().includes('<!doctype') || text.toLowerCase().includes('<html')) {
+    const titleMatch = text.match(/<title[^>]*>([^<]+)<\/title>/i);
+    const h1Match = text.match(/<h1[^>]*>([^<]+)<\/h1>/i);
+    const h2Match = text.match(/<h2[^>]*>([^<]+)<\/h2>/i);
+
+    let extracted = '';
+    if (titleMatch && titleMatch[1] && !titleMatch[1].toLowerCase().includes('untitled')) {
+      extracted = titleMatch[1].trim();
+    } else if (h1Match && h1Match[1]) {
+      extracted = h1Match[1].trim();
+    } else if (h2Match && h2Match[1]) {
+      extracted = h2Match[1].trim();
+    }
+
+    if (extracted) {
+      return `[Server Error ${status || 500}]: ${extracted}. (Backend FastAPI port 8000 atau Cloudflare Tunnel mungkin sedang down).`;
+    }
+
+    return `[Server Error ${status || 500}]: Server mengembalikan halaman error HTML. Pastikan FastAPI lokal di port 8000 dan Cloudflare Tunnel sedang berjalan.`;
+  }
+
+  // 5. Plain text error message
+  const cleanText = text.replace(/\s+/g, ' ').substring(0, 180);
+  return `[Backend Error ${status || 500}]: ${cleanText}`;
+}
+
+// ============================================================
 // 1D. EXPORT EXCEL VIA PYTHON BACKEND (WITH NATIVE CHARTS)
 // ============================================================
 
 resolver.define('exportExcelReport', async (req) => {
   const payload = req.payload || {};
   const FASTAPI_REPORT_URL =
-    'https://march-everything-ever-generated.trycloudflare.com/api/v1/reporting/export-excel';
+    'https://arnold-heard-burning-avoiding.trycloudflare.com/api/v1/reporting/export-excel';
 
   try {
     console.log('[Export Excel] Calling Python Excel Reporter:', FASTAPI_REPORT_URL);
@@ -1217,7 +1372,7 @@ resolver.define('exportExcelReport', async (req) => {
       console.error('[Export Excel] Python backend error:', pyRes.status, errText);
       return {
         success: false,
-        error: `Python report error: ${errText}`,
+        error: formatBackendErrorMessage(pyRes.status, errText),
       };
     }
 
@@ -1231,7 +1386,7 @@ resolver.define('exportExcelReport', async (req) => {
     console.error('[Export Excel] Error:', err);
     return {
       success: false,
-      error: err?.message || String(err),
+      error: `[Network Error]: ${err?.message || String(err)} (Periksa apakah Cloudflare Tunnel aktif)`,
     };
   }
 });
@@ -1324,7 +1479,7 @@ resolver.define(
         console.log(`[AI Recommendation] Issue ${issueKey} terdeteksi sebagai EPIC. Mengambil seluruh child work items...`);
         try {
           const jqlQuery = `parent = "${issueKey}" OR "Epic Link" = "${issueKey}" ORDER BY created ASC`;
-          const searchRes = await api.asUser().requestJira(route`/rest/api/3/search/jql`, {
+          const searchRes = await api.asUser().requestJira(route`/rest/api/3/search`, {
             method: 'POST',
             headers: {
               Accept: 'application/json',
@@ -1388,7 +1543,7 @@ resolver.define(
       // ========================================================
 
       const FASTAPI_URL =
-        "https://march-everything-ever-generated.trycloudflare.com/api/v1/predict";
+        'https://arnold-heard-burning-avoiding.trycloudflare.com/api/v1/predict';
 
       console.log('========================================');
       console.log('[DEBUG JIRA → FASTAPI]');
@@ -1397,6 +1552,40 @@ resolver.define(
       console.log('[DEBUG] isEpic:', isEpic);
       console.log('[DEBUG] childStories count:', childStories.length);
       console.log('========================================');
+
+      // Fetch assignable users for the project to balance workload across REAL Jira users
+      let realMembers = [];
+      try {
+        const projectKey = issueKey.split('-')[0];
+        const userRes = await api.asUser().requestJira(route`/rest/api/3/user/assignable/search?project=${projectKey}`, {
+          headers: { Accept: 'application/json' }
+        });
+        if (userRes.ok) {
+          const users = await userRes.json();
+          if (Array.isArray(users) && users.length > 0) {
+            const humanUsers = users.filter(u => u.accountType === 'atlassian' && !(u.displayName || '').toLowerCase().includes('bot') && !(u.displayName || '').toLowerCase().includes('app'));
+            if (humanUsers.length > 0) {
+              const roles = ['frontend', 'backend', 'mobile', 'qa'];
+              realMembers = humanUsers.map((u, idx) => ({
+                pn: u.accountId || String(idx + 1).padStart(3, '0'),
+                name: u.displayName || u.name,
+                role: roles[idx % roles.length],
+              }));
+              console.log(`[AI Recommendation] Fetched ${realMembers.length} real Jira project members:`, realMembers.map(m => m.name));
+            }
+          }
+        }
+      } catch (userErr) {
+        console.warn('[AI Recommendation] Failed to fetch Jira assignable users:', userErr);
+      }
+
+      if (realMembers.length === 0) {
+        realMembers = [
+          { pn: '001', name: 'Developer Backend', role: 'backend' },
+          { pn: '002', name: 'Developer Frontend', role: 'frontend' },
+          { pn: '003', name: 'Developer Mobile', role: 'mobile' },
+        ];
+      }
 
       const requestBody = {
         issue_key:
@@ -1423,25 +1612,7 @@ resolver.define(
             (st) => st.fields?.summary || ''
           ).filter(Boolean),
 
-        members: [
-          {
-            pn: '001',
-            name: 'Developer Backend',
-            role: 'backend',
-          },
-
-          {
-            pn: '002',
-            name: 'Developer Frontend',
-            role: 'frontend',
-          },
-
-          {
-            pn: '003',
-            name: 'QA Engineer',
-            role: 'qa',
-          },
-        ],
+        members: realMembers,
 
         selected_role:
           'all',
@@ -1474,69 +1645,72 @@ resolver.define(
       // STEP 3 — REQUEST
       // ========================================================
 
-      const pyResponse =
-        await fetch(
-          FASTAPI_URL,
-          {
-            method: 'POST',
+      let pyResponse;
+      let responseText = '';
 
-            headers: {
-              'Content-Type':
-                'application/json',
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
 
-              'bypass-tunnel-reminder':
-                'true',
-            },
+        pyResponse =
+          await fetch(
+            FASTAPI_URL,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'bypass-tunnel-reminder': 'true',
+              },
+              body: JSON.stringify(requestBody),
+              signal: controller.signal
+            }
+          );
+        clearTimeout(timeoutId);
 
-            body:
-              JSON.stringify(
-                requestBody
-              ),
-          }
-        );
+        responseText = await pyResponse.text();
+      } catch (fetchErr) {
+        console.error('[AI Recommendation] Network fetch error:', fetchErr);
+        return {
+          success: false,
+          errorType: 'NETWORK_ERROR',
+          status: 0,
+          message: `[Koneksi Terputus]: Tidak dapat menghubungi Cloudflare Tunnel / FastAPI (${fetchErr.message || String(fetchErr)}). Pastikan cloudflared dan FastAPI port 8000 aktif.`,
+          rawError: String(fetchErr),
+          subtasks: []
+        };
+      }
 
 
       // ========================================================
-      // STEP 4 — BACA RAW RESPONSE
+      // STEP 4 — CHECK RESPONSE STATUS
       // ========================================================
-
-      const responseText =
-        await pyResponse.text();
-
 
       console.log(
         '[AI Recommendation] FastAPI HTTP status:',
         pyResponse.status
       );
 
-
       console.log(
         '[AI Recommendation] FastAPI raw response:',
         responseText
       );
-
 
       if (!pyResponse.ok) {
         console.error(
           '============================================================'
         );
         console.error(
-          '[DIAGNOSTIK KONEKSI] FE <-> RESOLVER <-> FASTAPI BACKEND TERHUBUNG 100%!'
+          '[DIAGNOSTIK KONEKSI] FE <-> RESOLVER <-> FASTAPI BACKEND'
         );
         console.error(
-          `[DIAGNOSTIK KONEKSI] Namun FastAPI melempar error status HTTP ${pyResponse.status}:`,
+          `[DIAGNOSTIK KONEKSI] FastAPI melempar error status HTTP ${pyResponse.status}:`,
           responseText
         );
         console.error(
           '============================================================'
         );
 
-        let diagMsg = `[KONEKSI OK] Backend melempar error HTTP ${pyResponse.status}`;
-        if (responseText.includes('429') || responseText.includes('Quota exceeded') || responseText.includes('RESOURCE_EXHAUSTED')) {
-          diagMsg = `[KONEKSI OK 100%] Gagal di Gemini AI: Quota Limit 429 Habis. Ganti API Key di .env untuk mengatasi.`;
-        } else if (responseText.includes('403') || responseText.includes('PERMISSION_DENIED')) {
-          diagMsg = `[KONEKSI OK 100%] Gagal di Gemini AI: API Key (HTTP 403) Tidak Valid. Perbarui API Key di .env.`;
-        }
+        const diagMsg = formatBackendErrorMessage(pyResponse.status, responseText);
 
         return {
           success: false,
@@ -1653,22 +1827,32 @@ resolver.define(
       const normalizedTasks =
         rawSubtasks
           .map((task, index) => {
+            const taskSummary = String(
+              task?.summary ||
+              task?.text ||
+              task?.title ||
+              task?.name ||
+              task?.task ||
+              ''
+            ).trim();
 
-            let role =
-              'backend';
-
+            let role = 'backend';
 
             if (
+              /^(?:\[\s*(msc|mcs)[^\]]*\]|(msc|mcs)\s*[-:])/i.test(taskSummary) ||
+              /\b(msc|mcs)\b/i.test(taskSummary) ||
+              /\b(create new service|create service|service|endpoint|api|fds|migration|db schema|repository|controller|stored procedure|simpan lat long|save lat long|send geotagging|kirimkan pada fds|geotagging data)\b/i.test(taskSummary)
+            ) {
+              role = 'backend';
+            } else if (
               typeof task === 'object'
             ) {
-
               role =
                 task?.role ||
                 task?.category ||
                 task?.team ||
                 'backend';
             }
-
 
             const category =
               normalizeCategory(

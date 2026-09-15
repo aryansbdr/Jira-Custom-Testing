@@ -26,6 +26,7 @@ function downloadBase64File(base64Data, fileName, mimeType = 'application/vnd.op
 }
 
 export function SquadReport() {
+  const [projects, setProjects] = useState([]);
   const [currentProjectKey, setCurrentProjectKey] = useState('JT');
   const [epics, setEpics] = useState([]);
   const [selectedEpicKey, setSelectedEpicKey] = useState('');
@@ -42,29 +43,6 @@ export function SquadReport() {
   // Pagination for bottom-right table
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 10;
-
-  const loadEpics = useCallback(async (projKey) => {
-    try {
-      setLoadingEpics(true);
-      setError('');
-      const keyToUse = projKey || currentProjectKey;
-      const res = await invoke('getProjectEpics', { projectKey: keyToUse });
-      const fetchedEpics = res?.epics || [];
-      setEpics(fetchedEpics);
-      if (fetchedEpics.length > 0) {
-        setSelectedEpicKey(fetchedEpics[0].key);
-      } else {
-        setSelectedEpicKey('');
-        setStories([]);
-        setEpicDetails(null);
-      }
-    } catch (err) {
-      console.error('[SquadReport] Error loading Epics:', err);
-      setError(err?.message || 'Gagal memuat daftar Epic.');
-    } finally {
-      setLoadingEpics(false);
-    }
-  }, [currentProjectKey]);
 
   const loadStoriesForEpic = useCallback(async (epicKey, projKey) => {
     if (!epicKey) {
@@ -91,26 +69,67 @@ export function SquadReport() {
     }
   }, [currentProjectKey]);
 
+  const loadEpics = useCallback(async (projKey) => {
+    try {
+      setLoadingEpics(true);
+      setError('');
+      const keyToUse = projKey || currentProjectKey;
+      const res = await invoke('getProjectEpics', { projectKey: keyToUse });
+      const fetchedEpics = res?.epics || [];
+      setEpics(fetchedEpics);
+      if (fetchedEpics.length > 0) {
+        setSelectedEpicKey(fetchedEpics[0].key);
+      } else {
+        setSelectedEpicKey('ALL');
+        await loadStoriesForEpic('ALL', keyToUse);
+      }
+    } catch (err) {
+      console.error('[SquadReport] Error loading Epics:', err);
+      setError(err?.message || 'Gagal memuat daftar Epic.');
+      setSelectedEpicKey('ALL');
+      await loadStoriesForEpic('ALL', projKey || currentProjectKey);
+    } finally {
+      setLoadingEpics(false);
+    }
+  }, [currentProjectKey, loadStoriesForEpic]);
+
   useEffect(() => {
     async function init() {
-      let pKey = 'JT';
+      let pKey = '';
       try {
+        const pRes = await invoke('getAllProjects');
+        const projList = pRes?.projects || [];
+        setProjects(projList);
+
         if (view) {
           if (view.theme) await view.theme.enable();
           const context = await view.getContext();
-          const keyFromContext = context?.extension?.project?.key;
+          console.log('[SquadReport] Context loaded:', context);
+          const keyFromContext =
+            context?.extension?.project?.key ||
+            context?.extension?.projectKey ||
+            context?.extension?.project?.id ||
+            context?.project?.key;
           if (keyFromContext) {
             pKey = keyFromContext;
-            setCurrentProjectKey(pKey);
           }
         }
+        if (!pKey && projList.length > 0) {
+          pKey = projList[0].key;
+        }
+        if (!pKey) {
+          pKey = 'JT';
+        }
+        setCurrentProjectKey(pKey);
       } catch (err) {
-        console.warn('[SquadReport] Error getting Jira context:', err);
+        console.warn('[SquadReport] Error getting context/projects:', err);
+        pKey = 'JT';
+        setCurrentProjectKey('JT');
       }
       await loadEpics(pKey);
     }
     init();
-  }, [loadEpics]);
+  }, []);
 
   useEffect(() => {
     if (selectedEpicKey) {
@@ -134,15 +153,29 @@ export function SquadReport() {
 
     displayedStories.forEach((story) => {
       // Add parent story to table items
+      const storyAssignee = (story.assignee || story.assigneeName || '').trim();
       allTableItems.push({
         type: story.typeName || 'Story',
         key: story.key,
         summary: story.summary,
         status: story.status || 'To Do',
-        assignee: 'Story Parent',
+        assignee: storyAssignee || 'Story Parent',
         role: 'Parent',
         iconUrl: story.iconUrl || ''
       });
+
+      if (storyAssignee && storyAssignee.toLowerCase() !== 'story parent' && storyAssignee.toLowerCase() !== 'unassigned') {
+        if (!memberMap[storyAssignee]) {
+          memberMap[storyAssignee] = {
+            name: storyAssignee,
+            role: 'Story Assignee',
+            todo: 0,
+            inProgress: 0,
+            done: 0,
+            total: 0
+          };
+        }
+      }
 
       // Add subtasks
       (story.subtasks || []).forEach((sub) => {
@@ -160,7 +193,7 @@ export function SquadReport() {
           statusNorm = 'In Progress';
         }
 
-        const assigneeName = (sub.assignee || 'Unassigned').trim();
+        const assigneeName = (sub.assignee || sub.assigneeName || 'Unassigned').trim();
         if (assigneeName.toLowerCase() !== 'unassigned') {
           if (!memberMap[assigneeName]) {
             memberMap[assigneeName] = {
@@ -432,6 +465,41 @@ export function SquadReport() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', flex: '0 0 auto' }}>
+          {/* Project Selector */}
+          {projects.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <label htmlFor="project-top-select" style={{ fontSize: '12px', fontWeight: 600, color: `var(--ds-text-subtle, ${THEME.text.subtle})` }}>
+                Proyek:
+              </label>
+              <select
+                id="project-top-select"
+                value={currentProjectKey}
+                onChange={(e) => {
+                  const newKey = e.target.value;
+                  setCurrentProjectKey(newKey);
+                  loadEpics(newKey);
+                }}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: '4px',
+                  border: `1px solid var(--ds-border, ${THEME.border.input})`,
+                  backgroundColor: `var(--ds-surface-raised, ${THEME.surface.raised})`,
+                  color: `var(--ds-text, ${THEME.text.primary})`,
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  maxWidth: '220px',
+                  outline: 'none'
+                }}
+              >
+                {projects.map((p) => (
+                  <option key={p.key} value={p.key} style={{ backgroundColor: THEME.surface.overlay, color: THEME.text.primary }}>
+                    {p.name} ({p.key})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* Epic Selector */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <label htmlFor="epic-top-select" style={{ fontSize: '12px', fontWeight: 600, color: `var(--ds-text-subtle, ${THEME.text.subtle})` }}>
@@ -441,7 +509,7 @@ export function SquadReport() {
               id="epic-top-select"
               value={selectedEpicKey}
               onChange={(e) => setSelectedEpicKey(e.target.value)}
-              disabled={loadingEpics || epics.length === 0}
+              disabled={loadingEpics}
               style={{
                 padding: '6px 12px',
                 borderRadius: '4px',
@@ -454,6 +522,9 @@ export function SquadReport() {
                 outline: 'none'
               }}
             >
+              <option value="ALL" style={{ backgroundColor: THEME.surface.overlay, color: THEME.text.primary }}>
+                Semua Tiket Proyek ({currentProjectKey})
+              </option>
               {epics.map((e) => (
                 <option key={e.key} value={e.key} style={{ backgroundColor: THEME.surface.overlay, color: THEME.text.primary }}>
                   [{e.key}] {e.summary}
@@ -474,7 +545,7 @@ export function SquadReport() {
                 setSelectedStoryKey(e.target.value);
                 setCurrentPage(1);
               }}
-              disabled={loadingStories || stories.length === 0}
+              disabled={loadingStories}
               style={{
                 padding: '6px 12px',
                 borderRadius: '4px',

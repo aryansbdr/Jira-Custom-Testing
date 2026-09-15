@@ -34,7 +34,7 @@ resources:
   - key: main
     path: frontend/build
     tunnel:
-      port: 3000
+      port: 3001
 
 app:
   id: ari:cloud:ecosystem::app/8ca09d8a-834f-4d0c-9e63-2f77acc3f4ff

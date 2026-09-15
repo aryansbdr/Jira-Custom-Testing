@@ -153,7 +153,7 @@ export default function SubTaskRecommendation({ issueKey }) {
         } else if (issueKey) {
           localStorage.removeItem(`subtask_recs_${issueKey}`);
         }
-      } catch (e) {}
+      } catch (e) { }
 
       return nextGroups;
     });
@@ -278,7 +278,7 @@ export default function SubTaskRecommendation({ issueKey }) {
             } else if (issueKey) {
               localStorage.removeItem(`subtask_recs_${issueKey}`);
             }
-          } catch (e) {}
+          } catch (e) { }
 
           return nextGroups;
         });
@@ -397,7 +397,7 @@ export default function SubTaskRecommendation({ issueKey }) {
               cursor: loading || !issueKey ? 'not-allowed' : 'pointer',
             }}
           >
-            ✨ Generate Sub-Task Recommendations
+            Generate Sub-Task Recommendations
           </button>
         </div>
       ) : (
@@ -643,25 +643,25 @@ export default function SubTaskRecommendation({ issueKey }) {
                             >
                               {(task.parent_summary ||
                                 (task.parent_key && task.parent_key !== issueKey)) && (
-                                <span
-                                  style={{
-                                    fontSize: '11px',
-                                    color: 'var(--ds-text-subtle, #6B778C)',
-                                    fontWeight: 400,
-                                  }}
-                                >
-                                  Story:{' '}
-                                  <strong
+                                  <span
                                     style={{
-                                      color: 'var(--ds-text, #172B4D)',
-                                      fontWeight: 600,
+                                      fontSize: '11px',
+                                      color: 'var(--ds-text-subtle, #6B778C)',
+                                      fontWeight: 400,
                                     }}
                                   >
-                                    {task.parent_key ? `[${task.parent_key}] ` : ''}
-                                    {task.parent_summary || task.parent_key}
-                                  </strong>
-                                </span>
-                              )}
+                                    Story:{' '}
+                                    <strong
+                                      style={{
+                                        color: 'var(--ds-text, #172B4D)',
+                                        fontWeight: 600,
+                                      }}
+                                    >
+                                      {task.parent_key ? `[${task.parent_key}] ` : ''}
+                                      {task.parent_summary || task.parent_key}
+                                    </strong>
+                                  </span>
+                                )}
                               {task.assigneeName && (
                                 <span
                                   style={{
