@@ -51,7 +51,7 @@ def test_critical_alert_notification(req: CriticalAlertTestRequest) -> Dict[str,
     """
     try:
         sent = send_reminder_uc.execute(
-            project_or_epic=req.target_info,
+            epic_key=req.target_info,
             days_remaining=req.days_remaining,
             sprint_name=req.sprint_name,
         )

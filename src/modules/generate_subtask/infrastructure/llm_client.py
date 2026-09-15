@@ -20,19 +20,14 @@ def _closest_fibonacci(val: float) -> float:
 class LlmClient(ILlmClient):
 
     _SYSTEM_PROMPT = (
-        "Role: BRI Scrum Master. Decompose User Story into granular subtasks strictly matching AC and RAG dataset patterns.\n\n"
+        "Role: BRI Scrum Master. Decompose User Story into granular subtasks strictly matching AC intent and RAG dataset patterns on Database rag_store.db.\n\n"
         "RULES:\n"
-        "1. ROLE ASSIGNMENT & BACKEND / FRONTEND DECOMPOSITION:\n"
-        "   - Assign role 'frontend' (or 'mobile' for mobile context) for UI screens, layouts, input fields, cascading dropdowns, camera/gallery UI, and client-side form validations.\n"
-        "   - Assign role 'backend' for data queries, filter processing, business logic calculations, database storage, and external integrations.\n"
-        "   - If a feature requires backend processing (e.g. data filtering, search query, calculations) but NO specific endpoint path is written in the AC/Todo, create a functional BE task like 'Implement Query Filtering by <Criteria>' or 'Handle Data Filtering for <Feature>'. NEVER fabricate/invent imaginary URL paths (e.g. do NOT guess '/v1/fake_endpoint'). Only use 'Create Endpoint <path>' if the exact path or endpoint name is explicitly provided in the text.\n"
-        "2. NAMING CONVENTIONS & DETAIL PRESERVATION:\n"
-        "   - Use standard technical verbs: 'Create Layout', 'Create Component <Name>', 'Create Dropdown <Name>', 'Create Datepicker <Name>', 'Implement <Logic Name> Logic', 'Implement Query Filtering by <Criteria>', 'Save <Data> to <Table>'.\n"
-        "   - PRESERVE SPECIFIC OPTIONS / VALUES: When the AC/Description explicitly lists options, choices, or values for dropdowns, radios, or badges (e.g. 'Draft, Review, Disetujui, Ditolak'), INCLUDE them in parentheses in the title, e.g. 'Create Dropdown for Status Pengajuan (Draft, Review, Disetujui, Ditolak)'.\n"
-        "   - Preserve domain terms ('Debitur', 'PTK', 'Pengajuan Kredit', 'Risalah RKK', 'KUBL', 'Pencairan', 'MAB', etc.).\n"
-        "3. CONSOLIDATION: Sibling fields in the same section may merge with 'and'/'/'. Merge button states (visible/disabled) into ONE single task with state validation.\n\n"
-        'Output JSON (Clean titles without role prefix; role is "frontend", "backend", or "mobile"):\n'
-        '{"subtasks":[{"summary":"Create Layout for Risalah RKK","role":"frontend","story_points":1.0},{"summary":"Create Dropdown for Status Pengajuan (Draft, Review, Disetujui, Ditolak)","role":"frontend","story_points":1.0},{"summary":"Save KUBL Data to content_data_kbli","role":"backend","story_points":1.0}]}\n\n'
+        "1. DYNAMIC ACTION VERB MATCHING: Extract and reflect the exact primary action verb written in AC (e.g., 'Migrate' for 'Migrasi', 'Move' for 'Pindahkan', 'Update/Change' for 'Ganti', 'Create/Add' for new items, 'Add Validation' for validation rules). Inherit parent section verbs (e.g., 'BE: Migrasi endpoint...') for all child endpoints listed under that section.\n"
+        "2. RAG PATTERN MIMICKING: Strictly imitate squad prefixes ([MSC ...], [Mobile ...]), technical terminology, and naming structures retrieved from RAG Dataset without forcing rigid hardcoded verb rules.\n"
+        "3. EXCLUSIONS: NEVER generate QA/testing tasks or SDLC boilerplate (no 'Analyze requirements', 'Payload structure', 'Request validation', 'Review').\n"
+        "4. CONSOLIDATION: Sibling fields in the same section may merge with 'and'/'/'. Merge button states (visible/disabled) into ONE single task with state validation.\n\n"
+        'Output JSON (Clean titles without role prefix; role is "frontend" or "backend"):\n'
+        '{"subtasks":[{"summary":"Migrate Endpoint /v1/detailRiwayatOtsPemutusMikro","role":"backend","story_points":1.0},{"summary":"Move trigger Endpoint validateOTS","role":"frontend","story_points":1.0}]}\n\n'
     )
 
     def _get_gemini_api_keys(self) -> List[str]:
@@ -42,26 +37,7 @@ class LlmClient(ILlmClient):
     def get_text_embedding(self, text: str) -> List[float]:
         cleaned_text = str(text)[:4000]
 
-        # 1. Try Gemini Embedding first to match 3072-dim vectors stored in subtasks.db
-        gemini_keys = self._get_gemini_api_keys()
-        if gemini_keys:
-            for key in gemini_keys:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.EMBEDDING_MODEL}:embedContent?key={key}"
-                headers = {"Content-Type": "application/json"}
-                payload = {
-                    "model": f"models/{settings.EMBEDDING_MODEL}",
-                    "content": {"parts": [{"text": cleaned_text}]},
-                }
-                try:
-                    response = requests.post(url, json=payload, headers=headers, timeout=5)
-                    if response.status_code == 200:
-                        res_data = response.json()
-                        if "embedding" in res_data and "values" in res_data["embedding"]:
-                            return res_data["embedding"]["values"]
-                except Exception:
-                    pass
-
-        # 2. Fallback to OpenAI Embedding if Gemini fails or key not set
+        # 1. Try OpenAI Embedding if key exists
         if settings.OPENAI_API_KEY:
             try:
                 url = "https://api.openai.com/v1/embeddings"
@@ -77,9 +53,32 @@ class LlmClient(ILlmClient):
                 if response.status_code == 200:
                     return response.json()["data"][0]["embedding"]
             except Exception as e:
-                print(f"[LLM Client] OpenAI Embedding failed: {e}")
+                print(f"[LLM Client] OpenAI Embedding failed: {e}. Falling back to Gemini...")
 
-        raise Exception("Failed to generate embedding with all configured providers.")
+        # 2. Fallback to Gemini Embedding
+        gemini_keys = self._get_gemini_api_keys()
+        if not gemini_keys:
+            raise ValueError("Neither OPENAI_API_KEY nor GEMINI_API_KEY is configured.")
+
+        last_err = None
+        for key in gemini_keys:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.EMBEDDING_MODEL}:embedContent?key={key}"
+            headers = {"Content-Type": "application/json"}
+            payload = {
+                "model": f"models/{settings.EMBEDDING_MODEL}",
+                "content": {"parts": [{"text": cleaned_text}]},
+            }
+            try:
+                response = requests.post(url, json=payload, headers=headers, timeout=5)
+                if response.status_code == 200:
+                    res_data = response.json()
+                    if "embedding" in res_data and "values" in res_data["embedding"]:
+                        return res_data["embedding"]["values"]
+                last_err = f"Gemini Embedding API error ({response.status_code}): {response.text}"
+            except Exception as e:
+                last_err = str(e)
+
+        raise Exception(f"All embedding providers failed. Last error: {last_err}")
 
     def _clean_ac_text(self, text: str) -> str:
         """Sanitize and compress AC text to eliminate unnecessary tokens (HTML tags, wiki markup, excess whitespace)."""
@@ -97,18 +96,19 @@ class LlmClient(ILlmClient):
 
   
     _MOBILE_CONTEXT_KEYWORDS = [
+        "pemrakarsa",
+        "prakarsa",
+        "pemutus",
+        "prescreening",
+        "mikro",
+        "kur",
+        "slik",
+        "ots",
         "mobile",
         "mobile app",
-        "brispot",
         "android",
         "ios",
-        "aplikasi mobile",
-        "ots",
-        "prescreening",
-        "camera brispot",
-        "galeri brispot",
-        "layout mobile",
-        "activity android",
+        "aplikasi",
     ]
 
     def generate_subtasks_from_ac(
@@ -148,9 +148,9 @@ class LlmClient(ILlmClient):
         user_content += f"STORY: {safe_summary} (SP:{parent_sp})\nAC:\n{safe_desc}\n\n"
 
         if mode == "strict" and max_subtasks:
-            user_content += f"STRICT MODE: Output EXACTLY {max_subtasks} subtask(s).\n\n"
+            user_content += f"STRICT MODE: Output {max_subtasks} subtask(s).\n\n"
         else:
-            user_content += "FREE MODE: Cover all sections/modals/BE tasks.\n\n"
+            user_content += "FREE MODE: Cover all sections AC.\n\n"
 
         last_exception = None
 
@@ -264,20 +264,16 @@ class LlmClient(ILlmClient):
     def _parse_subtasks(self, parsed: dict, safe_summary: str, safe_desc: str = "") -> List[Subtask]:
         subtasks = []
         combined_text = (safe_summary + " " + (safe_desc or "")).lower()
-        has_web_or_corp = any(
-            kw in combined_text
-            for kw in ["korporasi", "mab", "web", "portal", "dashboard", "fe ", " fe", "ui", "tab ", "halaman", "browser"]
-        )
-        has_mobile_keyword = any(
+        has_mobile_story = any(
             kw in combined_text
             for kw in [
                 "mobile", "brispot", "android", "ios", "mantri", "aplikasi mobile", "mobile app",
-                "hanya untuk mobile", "untuk mobile", "camera brispot", "galeri brispot", "ots"
+                "hanya untuk mobile", "untuk mobile", "camera brispot", "galeri brispot",
+                "pemrakarsa", "pemutus", "prescreening", "prakarsa"
             ]
         )
-        has_mobile_story = has_mobile_keyword and not has_web_or_corp
-        is_pemutus = has_mobile_story and "pemutus" in combined_text
-        is_pemrakarsa = has_mobile_story and ("pemrakarsa" in combined_text or "prescreening" in combined_text)
+        is_pemutus = "pemutus" in combined_text
+        is_pemrakarsa = "pemrakarsa" in combined_text or "prakarsa" in combined_text or "prescreening" in combined_text
         is_bracket_mobile = is_pemrakarsa or is_pemutus
 
         mobile_tag = "[Mobile Pemutus]" if is_pemutus else "[Mobile Pemrakarsa]"
@@ -290,39 +286,76 @@ class LlmClient(ILlmClient):
             role_val = str(sub.get("role", "backend")).lower()
             raw_sp = sub.get("story_points", 1.0)
 
-            # Drop QA/Testing and SDLC boilerplate noise in code
-            if role_val in ("qa", "tester", "testing") or re.search(r'(\bqa\b|\btesting\b|\buat\b|\banalyze requirements\b|\bpayload structure\b|\brequest validation\b|\bmap request payload\b|\bcode review\b|\bdesign review\b)', summary_text, flags=re.IGNORECASE):
-                continue
-
             # Strip all leading role prefixes (BE -, WEB -, FE -, WEBAPP -, Mobile -, MSC -, MCS -, etc.)
             clean_body = re.sub(r'^((be|web|fe|webapp|mobile|msc|mcs|qa)\s*-\s*)+', '', summary_text, flags=re.IGNORECASE).strip()
+            clean_body_lower = clean_body.lower()
 
             # Auto-standardize [MCS ...] to [MSC ...]
             if clean_body.upper().startswith("[MCS"):
                 clean_body = re.sub(r'^\[MCS', '[MSC', clean_body, flags=re.IGNORECASE)
+                clean_body_lower = clean_body.lower()
 
-            # Determine role: respect AI role_val or bracket tag
-            if clean_body.startswith("[MSC") or clean_body.startswith("MSC -") or clean_body.startswith("BE -") or role_val == "backend":
-                role_key = "backend"
-                clean_body_no_bracket = re.sub(r'^\[(MSC|MCS|BE)[^\]]*\]\s*', '', clean_body, flags=re.IGNORECASE).strip()
-                if has_mobile_story:
-                    final_summary = f"{msc_tag} {clean_body_no_bracket}" if is_bracket_mobile else f"MSC - {clean_body_no_bracket}"
-                else:
-                    final_summary = f"BE - {clean_body_no_bracket}"
-            elif clean_body.startswith("[Mobile") or clean_body.startswith("MOBILE -") or role_val in ("mobile", "frontend", "fe", "web"):
-                clean_body_no_bracket = re.sub(r'^\[(Mobile|WEB|FE)[^\]]*\]\s*', '', clean_body, flags=re.IGNORECASE).strip()
-                if has_mobile_story or role_val == "mobile":
+            _is_backend_service = any(kw in clean_body_lower for kw in [
+                "/v1/", "/v2/", "create new service", "create service",
+                "queue ", "migrate", "endpoint", "api", "backend", "db schema",
+                "migration", "repository", "controller", "stored procedure", "fds",
+                "simpan lat long", "save lat long", "send geotagging", "kirimkan pada fds",
+                "geotagging data"
+            ])
+
+            # If clean_body already starts with a bracket tag like [Mobile ...] or [MSC ...]
+            if clean_body.startswith("["):
+                if clean_body_lower.startswith("[msc") or clean_body_lower.startswith("[mcs") or _is_backend_service:
+                    role_key = "backend"
+                    if clean_body_lower.startswith("[mobile") and _is_backend_service:
+                        clean_body = re.sub(r'^\[mobile\s*[^\]]*\]\s*', '', clean_body, flags=re.IGNORECASE).strip()
+                        clean_body = f"{msc_tag} {clean_body}" if is_bracket_mobile else f"MSC - {clean_body}"
+                elif clean_body_lower.startswith("[mobile"):
                     role_key = "mobile"
-                    final_summary = f"{mobile_tag} {clean_body_no_bracket}" if is_bracket_mobile else f"MOBILE - {clean_body_no_bracket}"
                 else:
-                    role_key = "frontend"
-                    final_summary = f"WEB - {clean_body_no_bracket}"
+                    role_key = "backend" if _is_backend_service else "mobile"
+                final_summary = clean_body
             else:
-                role_key = "backend"
-                if has_mobile_story:
-                    final_summary = f"{msc_tag} {clean_body}" if is_bracket_mobile else f"MSC - {clean_body}"
+                # Determine role & prefix
+                # Backend tasks get MSC - prefix for Mobile stories, and BE - prefix for Web stories
+                if _is_backend_service:
+                    role_key = "backend"
+                    if has_mobile_story:
+                        final_summary = f"{msc_tag} {clean_body}" if is_bracket_mobile else f"MSC - {clean_body}"
+                    else:
+                        final_summary = f"BE - {clean_body}"
+                elif any(kw in clean_body_lower for kw in ["pop up", "popup", "wording", "halaman", "button", "tombol", "screen", "layout", "figma", "tampilan", "dropdown", "autofill", "checkbox", "radio"]):
+                    if has_mobile_story:
+                        role_key = "mobile"
+                        final_summary = f"{mobile_tag} {clean_body}" if is_bracket_mobile else f"MOBILE - {clean_body}"
+                    else:
+                        role_key = "frontend"
+                        final_summary = f"WEB - {clean_body}"
+                elif "frontend" in role_val or "web" in role_val or "fe" == role_val:
+                    if has_mobile_story:
+                        role_key = "mobile"
+                        final_summary = f"{mobile_tag} {clean_body}" if is_bracket_mobile else f"MOBILE - {clean_body}"
+                    else:
+                        role_key = "frontend"
+                        final_summary = f"WEB - {clean_body}"
+                elif "mobile" in role_val:
+                    if any(kw in clean_body_lower for kw in ["service", "api", "endpoint", "channel", "backend", "inquiry", "integrasi", "fds"]):
+                        role_key = "backend"
+                        if has_mobile_story:
+                            final_summary = f"{msc_tag} {clean_body}" if is_bracket_mobile else f"MSC - {clean_body}"
+                        else:
+                            final_summary = f"BE - {clean_body}"
+                    else:
+                        role_key = "mobile"
+                        final_summary = f"{mobile_tag} {clean_body}" if is_bracket_mobile else f"MOBILE - {clean_body}"
+                elif "qa" in role_val or "tester" in role_val:
+                    continue
                 else:
-                    final_summary = f"BE - {clean_body}"
+                    role_key = "backend"
+                    if has_mobile_story:
+                        final_summary = f"{msc_tag} {clean_body}" if is_bracket_mobile else f"MSC - {clean_body}"
+                    else:
+                        final_summary = f"BE - {clean_body}"
 
             subtasks.append(
                 Subtask(
@@ -367,10 +400,11 @@ class LlmClient(ILlmClient):
             f"AC:\n{cleaned_desc[:20000]}\n\n"
             f"EXISTING SUBTASKS IN JIRA:\n{existing_summaries}\n\n"
             "GAP FILL MODE INSTRUCTIONS:\n"
-            "1. Carefully audit every explicit endpoint (e.g., /insert..., /inquiry..., /api/...), service, function (e.g., cekData), column, modal, and feature in the AC against the EXISTING SUBTASKS list above.\n"
-            "2. If ANY explicit endpoint, function, or feature mentioned in the AC is NOT explicitly covered by the existing subtasks, YOU MUST GENERATE A SUBTASK FOR IT!\n"
-            "3. Output ONLY the missing subtasks.\n"
-            "4. Only return {\"subtasks\": []} if EVERY single endpoint, service, function, and UI component in the AC is 100% matched by an existing subtask."
+            "1. Audit every explicit action, service, endpoint, persistence/save process, and UI component in the AC against the EXISTING SUBTASKS list.\n"
+            "2. Distinct technical responsibilities mentioned in the AC MUST NOT be merged into a single existing subtask. For example, data saving/persistence (e.g., storing data/coordinates) and external transmission/API endpoints (e.g., sending data to external/3rd party services) are SEPARATE responsibilities. If any distinct action in the AC is not explicitly covered by an existing subtask, YOU MUST GENERATE A SUBTASK FOR IT.\n"
+            "3. Output ONLY the missing subtasks using appropriate role prefixes (MSC - for backend/channel services, WEB - for web frontend, MOBILE - for mobile frontend).\n"
+            "4. Only return {\"subtasks\": []} if EVERY single distinct action, service, endpoint, and UI component in the AC is 100% covered by an existing subtask.\n"
+            "5. MANDATORY TODO LIST AUDIT: Pay special attention to any explicit 'Todo:' or 'To Do:' bullet/numbered list in the story description. You MUST audit EVERY single TODO item item-by-item against the EXISTING SUBTASKS list. If any item from the TODO list (e.g., 'Web Enhance modal pop search debitur by ptk dan nama') does NOT have a corresponding subtask in EXISTING SUBTASKS, YOU MUST GENERATE A SUBTASK FOR IT."
         )
 
         last_exception = None
@@ -409,15 +443,55 @@ class LlmClient(ILlmClient):
 
         # Fallback to Gemini
         try:
-            from modules.generate_subtask.infrastructure.gemini_llm_client import GeminiLlmClient
-            gemini = GeminiLlmClient()
-            gap_subtasks = self._filter_gap_subtasks(
-                gemini.fill_gaps_from_ac_raw(self._SYSTEM_PROMPT, gap_user_content, summary)
-            )
-            # Deduplicate against existing cloned subtasks in code (not via prompt instruction)
+            gap_subtasks = self._filter_gap_subtasks(self._fill_gaps_gemini(gap_user_content, summary))
             gap_subtasks = self._deduplicate_gap_subtasks(gap_subtasks, cloned_subtasks)
             return gap_subtasks
         except Exception as e:
+            return []
+
+    def _fill_gaps_gemini(self, gap_user_content: str, summary: str) -> List[Subtask]:
+        combined_prompt = f"{self._SYSTEM_PROMPT}\n\n{gap_user_content}"
+        fallback_models = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+        api_keys = self._get_gemini_api_keys()
+        if not api_keys:
+            return []
+
+        text_content = None
+        for api_key in api_keys:
+            for model_name in fallback_models:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                headers = {"Content-Type": "application/json"}
+                gen_config = {
+                    "temperature": 0.0,
+                    "seed": 42,
+                    "maxOutputTokens": 800,
+                    "responseMimeType": "application/json",
+                }
+                if "2.5" in model_name:
+                    gen_config["thinkingConfig"] = {"thinkingBudget": 0}
+
+                payload = {
+                    "contents": [{"parts": [{"text": combined_prompt}]}],
+                    "generationConfig": gen_config,
+                }
+                try:
+                    response = requests.post(url, json=payload, headers=headers, timeout=10)
+                    if response.status_code == 200:
+                        res_data = response.json()
+                        text_content = res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        break
+                except Exception:
+                    continue
+            if text_content:
+                break
+
+        if not text_content:
+            return []
+
+        try:
+            parsed = json.loads(text_content)
+            return self._parse_subtasks(parsed, summary)
+        except Exception:
             return []
 
     _BANNED_GAP_VERBS = re.compile(
@@ -427,9 +501,40 @@ class LlmClient(ILlmClient):
         re.IGNORECASE,
     )
 
-    def _normalize_summary(self, summary: str) -> str:
-        normalized = re.sub(r'^((be|web|fe|webapp|mobile)\s*-\s*)+', '', summary, flags=re.IGNORECASE)
-        return normalized.strip().lower()
+    _STOP_WORDS = {
+        "for", "in", "to", "by", "of", "and", "or", "the", "a", "an", "on", "with", "data", "subtask", "task"
+    }
+
+    _ACTION_KEYWORDS = {
+        "reset", "cari", "search", "batal", "cancel", "tambah", "add", "detail", "delete", "remove",
+        "edit", "update", "inquiry", "save", "simpan", "send", "kirim", "enhance", "popup", "modal", "layout"
+    }
+
+    def _normalize_tokens(self, summary: str) -> set:
+        clean = re.sub(r'^((be|web|fe|webapp|mobile|msc|mcs|qa)\s*-\s*)+', '', summary, flags=re.IGNORECASE).strip()
+        clean = re.sub(r'^\[[^\]]+\]\s*', '', clean, flags=re.IGNORECASE).strip()
+        words = re.findall(r'[a-zA-Z0-9]+', clean.lower())
+        return {w for w in words if w not in self._STOP_WORDS}
+
+    def _is_similar_subtask(self, sub1_summary: str, sub2_summary: str) -> bool:
+        tokens1 = self._normalize_tokens(sub1_summary)
+        tokens2 = self._normalize_tokens(sub2_summary)
+        if not tokens1 or not tokens2:
+            return False
+        
+        # Check for conflicting action keywords (e.g., reset vs cari)
+        actions1 = tokens1 & self._ACTION_KEYWORDS
+        actions2 = tokens2 & self._ACTION_KEYWORDS
+        if actions1 and actions2 and not (actions1 & actions2):
+            return False
+
+        if tokens1 == tokens2:
+            return True
+        
+        intersection = tokens1 & tokens2
+        min_len = min(len(tokens1), len(tokens2))
+        overlap_ratio = len(intersection) / float(min_len) if min_len > 0 else 0.0
+        return overlap_ratio >= 0.8 or tokens1.issubset(tokens2) or tokens2.issubset(tokens1)
 
     def _deduplicate_gap_subtasks(
         self,
@@ -438,24 +543,19 @@ class LlmClient(ILlmClient):
     ) -> List[Subtask]:
         """
         Remove any subtask returned by the LLM gap-fill that already exists
-        in the cloned subtask list. Comparison is done by normalizing both
-        summaries (strip prefix + lowercase) so minor casing/prefix differences
-        are ignored. This replaces the 'do NOT duplicate' instruction in the prompt.
+        in the cloned subtask list. Uses token similarity and action keyword matching
+        so minor casing, prefix, or suffix variations are safely recognized as duplicates.
         """
-        # Build a set of normalized existing summaries for O(1) lookup
-        existing_normalized = {
-            self._normalize_summary(s.summary) for s in existing_subtasks
-        }
-
         unique = []
         for sub in gap_subtasks:
-            normalized = self._normalize_summary(sub.summary)
-            if normalized in existing_normalized:
-                # Skip — this subtask already exists in the cloned list
-                print(f"[Dedup] Skipping duplicate gap subtask: '{sub.summary}'")
-                continue
-            existing_normalized.add(normalized)
-            unique.append(sub)
+            is_dup = False
+            for ex in existing_subtasks:
+                if self._is_similar_subtask(sub.summary, ex.summary):
+                    print(f"[Dedup] Skipping duplicate gap subtask: '{sub.summary}' (matches existing '{ex.summary}')")
+                    is_dup = True
+                    break
+            if not is_dup:
+                unique.append(sub)
         return unique
 
     def _filter_gap_subtasks(self, subtasks: List[Subtask]) -> List[Subtask]:

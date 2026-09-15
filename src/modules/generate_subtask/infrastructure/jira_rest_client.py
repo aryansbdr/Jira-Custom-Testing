@@ -1,7 +1,6 @@
 import requests
 import re
 import datetime
-import time
 from typing import List, Dict, Any, Optional
 from shared.config import settings
 from modules.generate_subtask.domain.models import Story
@@ -14,12 +13,8 @@ class JiraRestClient(IJiraClient):
     and Jira Cloud (Basic Auth) dynamically.
     """
 
-    def _get_base_url(self) -> str:
-        url = str(settings.JIRA_URL or "").strip().strip('\r\n\t "\'').rstrip('/')
-        return url
-
     def _is_cloud(self) -> bool:
-        return "atlassian.net" in self._get_base_url().lower()
+        return "atlassian.net" in settings.JIRA_URL.lower()
 
     def _get_headers(
         self, custom_headers: Optional[Dict[str, str]] = None
@@ -29,28 +24,30 @@ class JiraRestClient(IJiraClient):
             headers.update(custom_headers)
 
         # Determine authentication method based on Jira type
-        if not self._is_cloud():
-            token = str(settings.JIRA_API_TOKEN or "").strip().strip('\r\n\t "\'')
-            headers["Authorization"] = f"Bearer {token}"
+        if self._is_cloud():
+            pass
+        else:
+            # Jira Server/Data Center (e.g. jira.bri.co.id) expects Bearer token PAT auth
+            headers["Authorization"] = f"Bearer {settings.JIRA_API_TOKEN}"
 
         return headers
 
     def _get_auth(self) -> Optional[requests.auth.HTTPBasicAuth]:
         if self._is_cloud():
-            email = str(settings.JIRA_EMAIL or "").strip().strip('\r\n\t "\'')
-            token = str(settings.JIRA_API_TOKEN or "").strip().strip('\r\n\t "\'')
-            if not email or not token:
+            if not settings.JIRA_EMAIL or not settings.JIRA_API_TOKEN:
                 raise ValueError(
                     "For Jira Cloud, JIRA_EMAIL and JIRA_API_TOKEN must be configured."
                 )
-            return requests.auth.HTTPBasicAuth(email, token)
+            return requests.auth.HTTPBasicAuth(
+                settings.JIRA_EMAIL, settings.JIRA_API_TOKEN
+            )
+        # Server PAT does not use Basic Auth parameters
         return None
 
     def _clean_key(self, raw_key: str) -> str:
         if not raw_key:
             return ""
         raw_key = raw_key.strip()
-        # Extract issue key if full URL is passed (e.g. https://domain.atlassian.net/browse/SCRUM-15)
         if "/browse/" in raw_key:
             raw_key = raw_key.split("/browse/")[-1].split("?")[0].split("#")[0].strip()
         return raw_key
@@ -80,64 +77,45 @@ class JiraRestClient(IJiraClient):
                     pass
         return 0.0
 
-    def _execute_jql_search(
-        self, jql: str, fields: List[str], max_results: int = 100
-    ) -> List[dict]:
-        """Unified JQL search executing POST on Jira Cloud /rest/api/3/search/jql and GET on Jira Server /rest/api/2/search."""
-        try:
-            headers = self._get_headers()
-            auth = self._get_auth()
-        except Exception as auth_err:
-            print(f"Warning: Jira authentication skipped: {auth_err}")
-            return []
-
-        base_url = self._get_base_url()
-        if self._is_cloud():
-            # Jira Cloud: GET /rest/api/3/search/jql
-            url = f"{base_url}/rest/api/3/search/jql"
-            params = {
-                "jql": jql,
-                "fields": ",".join(fields) if isinstance(fields, list) else fields,
-                "maxResults": max_results,
-            }
-            try:
-                res = requests.get(url, headers=headers, params=params, auth=auth, timeout=35)
-                if res.status_code == 200:
-                    return res.json().get("issues", [])
-                else:
-                    print(f"Warning: Jira Cloud search failed ({res.status_code}): {res.text[:200]}")
-            except Exception as e:
-                print(f"Warning: Jira Cloud search exception: {e}")
-        else:
-            # Jira Server / DC: GET /rest/api/2/search
-            url = f"{base_url}/rest/api/2/search"
-            params = {
-                "jql": jql,
-                "fields": ",".join(fields) if isinstance(fields, list) else fields,
-                "maxResults": max_results,
-            }
-            try:
-                res = requests.get(url, headers=headers, params=params, auth=auth, timeout=35)
-                if res.status_code == 200:
-                    return res.json().get("issues", [])
-                else:
-                    print(f"Warning: Jira Server search failed ({res.status_code}): {res.text[:200]}")
-            except Exception as e:
-                print(f"Warning: Jira Server search exception: {e}")
-
-        return []
-
     def get_epic_issues(self, epic_key: str) -> List[Story]:
         epic_key = self._clean_key(epic_key)
         if not epic_key or not self._is_issue_key(epic_key):
             return []
+        # Jira Cloud has migrated search to /rest/api/3/search/jql, Server remains on /rest/api/2/search
+        if self._is_cloud():
+            url = f"{settings.JIRA_URL.rstrip('/')}/rest/api/3/search/jql"
+        else:
+            url = f"{settings.JIRA_URL.rstrip('/')}/rest/api/2/search"
+
+        headers = self._get_headers()
+        auth = self._get_auth()
 
         jql = f'parent = "{epic_key}" OR "Epic Link" = "{epic_key}" ORDER BY rank ASC'
-        fields = ["summary", "description", settings.JIRA_STORY_POINTS_FIELD, "issuetype", "status"]
-        issues_raw = self._execute_jql_search(jql, fields, max_results=100)
+
+        params = {
+            "jql": jql,
+            "fields": f"summary,description,{settings.JIRA_STORY_POINTS_FIELD},issuetype,status",
+            "maxResults": 100,
+        }
+
+        response = None
+        for attempt in range(2):
+            try:
+                response = requests.get(
+                    url, headers=headers, params=params, auth=auth, timeout=25
+                )
+                if response.status_code == 200:
+                    break
+            except Exception as req_err:
+                if attempt == 1:
+                    raise req_err
+                time.sleep(1)
 
         stories = []
-        for item in issues_raw:
+
+        if response.status_code == 200:
+            data = response.json()
+            for item in data.get("issues", []):
                 fields = item.get("fields", {})
 
                 description_text = ""
@@ -153,27 +131,15 @@ class JiraRestClient(IJiraClient):
                     description_text = description_text.replace("\r", "")
 
                 issuetype_obj = fields.get("issuetype") or {}
-                issuetype_name = (
-                    issuetype_obj.get("name", "Story")
-                    if isinstance(issuetype_obj, dict)
-                    else "Story"
-                )
-                is_subtask = (
-                    issuetype_obj.get("subtask", False)
-                    if isinstance(issuetype_obj, dict)
-                    else False
-                )
+                issuetype_name = issuetype_obj.get("name", "Story") if isinstance(issuetype_obj, dict) else "Story"
+                is_subtask = issuetype_obj.get("subtask", False) if isinstance(issuetype_obj, dict) else False
 
-                # Skip subtasks when querying Epic children — Epic children must be Stories, Tasks, Bugs, etc.
+                # Skip subtasks when querying Epic children 
                 if is_subtask or issuetype_name.lower() in ["sub-task", "subtask", "sub task"]:
                     continue
 
                 status_obj = fields.get("status") or {}
-                status_name = (
-                    status_obj.get("name", "To Do")
-                    if isinstance(status_obj, dict)
-                    else "To Do"
-                )
+                status_name = status_obj.get("name", "To Do") if isinstance(status_obj, dict) else "To Do"
 
                 summary_text = fields.get("summary") or ""
                 stories.append(
@@ -211,15 +177,15 @@ class JiraRestClient(IJiraClient):
         parent_key = self._clean_key(parent_key)
         if not parent_key:
             return set()
-
+        
+        headers = self._get_headers()
+        auth = self._get_auth()
+        
+        # Cloud uses API v3, Server uses v2
+        version = "3" if self._is_cloud() else "2"
+        url = f"{settings.JIRA_URL.rstrip('/')}/rest/api/{version}/issue/{parent_key}?fields=subtasks"
+        
         try:
-            headers = self._get_headers()
-            auth = self._get_auth()
-
-            # Cloud uses API v3, Server uses v2
-            version = "3" if self._is_cloud() else "2"
-            url = f"{settings.JIRA_URL.rstrip('/')}/rest/api/{version}/issue/{parent_key}?fields=subtasks"
-
             response = requests.get(url, headers=headers, auth=auth, timeout=5)
             if response.status_code == 200:
                 data = response.json()
@@ -227,7 +193,7 @@ class JiraRestClient(IJiraClient):
                 return {st.get("fields", {}).get("summary", "").strip().lower() for st in subtasks if st.get("fields", {}).get("summary")}
         except Exception as e:
             print(f"Warning: Failed to fetch existing subtasks for {parent_key}: {e}")
-
+            
         return set()
 
     def get_single_issue(self, issue_key: str) -> Optional[Story]:
@@ -236,13 +202,8 @@ class JiraRestClient(IJiraClient):
         if not issue_key or not self._is_issue_key(issue_key):
             return None
         url = f"{settings.JIRA_URL.rstrip('/')}/rest/api/2/issue/{issue_key}"
-        try:
-            headers = self._get_headers()
-            auth = self._get_auth()
-        except Exception as auth_err:
-            print(f"Warning: Jira authentication skipped: {auth_err}")
-            return None
-
+        headers = self._get_headers()
+        auth = self._get_auth()
         params = {"fields": f"summary,description,{settings.JIRA_STORY_POINTS_FIELD},issuetype,status,parent"}
 
         response = None
@@ -253,12 +214,12 @@ class JiraRestClient(IJiraClient):
                     break
             except Exception as req_err:
                 if attempt == 1:
-                    print(f"Warning: Failed to fetch issue {issue_key}: {req_err}")
-                    return None
+                    raise req_err
                 time.sleep(1)
-        if not response or response.status_code != 200:
-            print(f"Warning: Failed to fetch issue {issue_key}: {response.status_code if response else 'No response'}")
-            return None
+        if response.status_code != 200:
+            raise Exception(
+                f"Failed to fetch issue {issue_key} from Jira ({response.status_code}): {response.text}"
+            )
 
         item = response.json()
         fields = item.get("fields", {})
@@ -272,7 +233,7 @@ class JiraRestClient(IJiraClient):
             parent_obj = fields.get("parent") or {}
             parent_key = parent_obj.get("key")
             if parent_key and parent_key != issue_key:
-                print(f"  ℹ️ [{issue_key}] adalah Subtask. Otomatis beralih ke parent Story/Task [{parent_key}]...")
+                print(f" [{issue_key}] adalah Subtask. Otomatis beralih ke parent Story/Task [{parent_key}]...")
                 return self.get_single_issue(parent_key)
 
         description_text = ""
@@ -438,183 +399,6 @@ class JiraRestClient(IJiraClient):
         extract_text(adf_obj)
         return " ".join(text_parts).strip()
 
-    def _resolve_target_info(self, root_key: str) -> Dict[str, Any]:
-        """
-        Dynamically analyzes root_key to determine if it is:
-        1. A Dashboard ID / URL (e.g. 26953, 20893, selectPageId=26953)
-        2. An Agile Board ID / RapidView ID (e.g. 2342, 2735)
-        3. An Agile Sprint ID (e.g. 10588, 9911)
-        4. A Filter ID (e.g. 27735, 40101)
-        5. An Epic or Issue Key (e.g. BL-38812, JT-146)
-        6. A Project Key (e.g. JT, BL)
-        """
-        key = str(root_key or "").strip()
-        auth = self._get_auth()
-        headers = self._get_headers()
-        base_url = settings.JIRA_URL.rstrip("/")
-        
-        # Check if root_key is a direct JQL Query string (e.g. "project = BL AND resolution = Unresolved...")
-        lower_key = key.lower()
-        if (
-            " AND " in key or " OR " in key or "order by" in lower_key or
-            lower_key.startswith("project =") or lower_key.startswith("project=") or
-            lower_key.startswith("project in") or lower_key.startswith("assignee ") or
-            lower_key.startswith("issuetype ") or lower_key.startswith("status ")
-        ):
-            return {
-                "type": "jql",
-                "id": "custom_jql",
-                "title": "Custom JQL Search Query",
-                "jql": key,
-            }
-
-        # Check for numeric ID in URL or raw digits
-        num_id = None
-        if "selectPageId=" in key:
-            m = re.search(r'selectPageId=(\d+)', key)
-            if m: num_id = m.group(1)
-        elif "pageId=" in key or "id=" in key:
-            m = re.search(r'(?:pageId|id)=(\d+)', key)
-            if m: num_id = m.group(1)
-        elif key.isdigit():
-            num_id = key
-
-        if num_id:
-            # 1. Try as Dashboard ID (Jira Server/DC & Cloud)
-            try:
-                d_res = requests.get(f"{base_url}/rest/dashboards/1.0/{num_id}", headers=headers, auth=auth, timeout=8)
-                if d_res.status_code != 200:
-                    d_res = requests.get(f"{base_url}/rest/api/2/dashboard/{num_id}", headers=headers, auth=auth, timeout=8)
-
-                if d_res.status_code == 200:
-                    d_data = d_res.json()
-                    dash_title = d_data.get("title") or d_data.get("name") or f"Dashboard {num_id}"
-                    gadgets = d_data.get("gadgets", []) or d_data.get("items", [])
-                    found_board = None
-                    found_sprint = None
-                    found_filters = []
-                    found_projects = []
-
-                    def _extract_id_from_text(text: str, key_name: str) -> Optional[str]:
-                        if not text:
-                            return None
-                        m = re.search(rf'{key_name}=(\d+)', str(text))
-                        return m.group(1) if m else None
-                    
-                    for g in gadgets:
-                        gid = g.get("id")
-                        # Check direct gadget object in list first
-                        g_url = g.get("gadgetUrl") or g.get("uri") or ""
-                        rendered_url = g.get("renderedGadgetUrl") or ""
-                        
-                        # Inspect params/userPrefs inside g
-                        direct_prefs = g.get("userPrefs") or {}
-                        if isinstance(direct_prefs, list):
-                            direct_prefs = {f.get("name"): f.get("value") for f in direct_prefs if isinstance(f, dict)}
-
-                        rv_id = direct_prefs.get("rapidViewId") or direct_prefs.get("boardId") or _extract_id_from_text(rendered_url, "rapidViewId")
-                        sp_id = direct_prefs.get("sprintId") or _extract_id_from_text(rendered_url, "sprintId")
-                        fid = direct_prefs.get("filterId") or direct_prefs.get("searchId") or _extract_id_from_text(rendered_url, "filterId") or _extract_id_from_text(rendered_url, "id")
-
-                        # If not found directly, fetch gadget details
-                        if gid and (not rv_id and not sp_id and not fid):
-                            try:
-                                g_res = requests.get(f"{base_url}/rest/dashboards/1.0/{num_id}/gadget/{gid}", headers=headers, auth=auth, timeout=4)
-                                if g_res.status_code == 200:
-                                    gd = g_res.json()
-                                    props = gd.get("context", {}).get("dashboardItem", {}).get("properties", {})
-                                    up_fields = gd.get("userPrefs", {})
-                                    if isinstance(up_fields, dict) and "fields" in up_fields:
-                                        user_prefs = {f.get("name"): f.get("value") for f in up_fields.get("fields", []) if isinstance(f, dict)}
-                                    elif isinstance(up_fields, dict):
-                                        user_prefs = up_fields
-                                    else:
-                                        user_prefs = {}
-
-                                    r_url = gd.get("renderedGadgetUrl") or gd.get("gadgetUrl") or ""
-                                    rv_id = props.get("rapidViewId") or user_prefs.get("rapidViewId") or props.get("boardId") or user_prefs.get("boardId") or _extract_id_from_text(r_url, "rapidViewId")
-                                    sp_id = props.get("sprintId") or user_prefs.get("sprintId") or _extract_id_from_text(r_url, "sprintId")
-                                    fid = props.get("filterId") or user_prefs.get("filterId") or props.get("searchId") or user_prefs.get("searchId") or _extract_id_from_text(r_url, "filterId") or _extract_id_from_text(r_url, "id")
-                            except Exception:
-                                pass
-
-                        if rv_id and str(rv_id).isdigit() and not found_board:
-                            found_board = str(rv_id)
-                        if sp_id and str(sp_id).isdigit() and sp_id != "auto" and not found_sprint:
-                            found_sprint = str(sp_id)
-                        if fid and str(fid).isdigit() and str(fid) not in found_filters:
-                            found_filters.append(str(fid))
-
-                    return {
-                        "type": "dashboard",
-                        "id": num_id,
-                        "title": dash_title,
-                        "board_id": found_board,
-                        "sprint_id": found_sprint,
-                        "filter_ids": found_filters,
-                    }
-            except Exception as e:
-                print(f"Warning: Dashboard resolution for {num_id} error: {e}")
-
-            # 2. Try as Agile Board ID
-            try:
-                b_res = requests.get(f"{base_url}/rest/agile/1.0/board/{num_id}", headers=headers, auth=auth, timeout=5)
-                if b_res.status_code == 200:
-                    b_data = b_res.json()
-                    return {
-                        "type": "board",
-                        "id": num_id,
-                        "title": f"Board {b_data.get('name')}",
-                        "board_id": num_id,
-                        "sprint_id": None,
-                    }
-            except Exception:
-                pass
-
-            # 3. Try as Agile Sprint ID
-            try:
-                sp_res = requests.get(f"{base_url}/rest/agile/1.0/sprint/{num_id}", headers=headers, auth=auth, timeout=5)
-                if sp_res.status_code == 200:
-                    sp_data = sp_res.json()
-                    return {
-                        "type": "sprint",
-                        "id": num_id,
-                        "title": f"Sprint {sp_data.get('name')}",
-                        "board_id": None,
-                        "sprint_id": num_id,
-                        "sprint_name": sp_data.get("name"),
-                    }
-            except Exception:
-                pass
-
-            # 4. Try as Filter ID
-            try:
-                f_res = requests.get(f"{base_url}/rest/api/2/filter/{num_id}", headers=headers, auth=auth, timeout=5)
-                if f_res.status_code == 200:
-                    f_data = f_res.json()
-                    return {
-                        "type": "filter",
-                        "id": num_id,
-                        "title": f"Filter {f_data.get('name')}",
-                        "jql": f_data.get("jql"),
-                    }
-            except Exception:
-                pass
-
-        # Text-based identifier
-        if "-" in key:
-            return {
-                "type": "epic_or_issue",
-                "key": key,
-                "title": f"Issue / Epic {key}",
-            }
-        else:
-            return {
-                "type": "project",
-                "key": key,
-                "title": f"Project {key}",
-            }
-
     def get_progress_report_data(
         self, root_key: str, active_employees: Optional[List[Any]] = None
     ) -> Dict[str, Any]:
@@ -627,7 +411,7 @@ class JiraRestClient(IJiraClient):
         headers = self._get_headers()
         auth = self._get_auth()
         api_ver = "3" if self._is_cloud() else "2"
-        base_jira_url = self._get_base_url()
+        base_jira_url = settings.JIRA_URL.rstrip("/")
 
         # Build employee role lookup dictionary (by lower name and PN)
         emp_role_map = {}
@@ -651,157 +435,98 @@ class JiraRestClient(IJiraClient):
                 return "In Progress"
             return "To Do"
 
-        # 1. Dynamically resolve target type and parameters
-        target_info = self._resolve_target_info(root_key)
-        target_type = target_info.get("type", "general")
-        root_summary = target_info.get("title") or root_key
-        is_dashboard = (target_type == "dashboard")
-        is_project_level = (target_type == "project")
+        # Check if input is a Dashboard URL or Page ID (e.g. selectPageId=26953 or 23001)
+        dashboard_id = None
+        if "selectPageId=" in root_key:
+            m = re.search(r'selectPageId=(\d+)', root_key)
+            if m:
+                dashboard_id = m.group(1)
+        elif "ConfigurePortalPages" in root_key or "Dashboard" in root_key:
+            m = re.search(r'(?:id|pageId|selectPageId)=(\d+)', root_key)
+            if m:
+                dashboard_id = m.group(1)
+        elif root_key.isdigit():
+            dashboard_id = root_key
+
+        is_dashboard = bool(dashboard_id) in root_key.lower()
+        is_project_level = (not is_dashboard) and (("-" not in root_key) or root_key.upper() in ("ALL", "PROJECT"))
         project_name = root_key if is_project_level else root_key.split("-")[0]
 
         issues_raw = []
-        sprint_info = self.get_active_sprint_info(root_key, target_info=target_info)
-        resolved_sprint_id = target_info.get("sprint_id") or (sprint_info.get("sprint_id") if sprint_info else None)
-        resolved_board_id = target_info.get("board_id")
+        root_summary = root_key
 
-      
-        if target_type == "jql" or target_info.get("jql"):
-            custom_jql = target_info.get("jql") or root_key
-            issues_raw = self._execute_jql_search(
-                jql=custom_jql,
-                fields=["summary", "status", "assignee", "parent", "issuetype", "subtasks", "components", "customfield_10102", settings.JIRA_STORY_POINTS_FIELD],
-                max_results=200
-            )
-            root_summary = f"JQL: {custom_jql[:60]}..."
-
-        elif resolved_sprint_id:
+        if is_dashboard:
+            dashboard_title = f"Dashboard Korporasi 1 (ID: {dashboard_id or '26953'})"
+            root_summary = f"Inquiry Live Jira Dashboard: {dashboard_title}"
+            
+            # Dynamically query Agile Boards for the dashboard / squad
+            board_query = "Korporasi 1"
             try:
-                iss_res = requests.get(
-                    f"{base_jira_url}/rest/agile/1.0/sprint/{resolved_sprint_id}/issue",
+                b_res = requests.get(
+                    f"{base_jira_url}/rest/agile/1.0/board",
                     headers=headers,
                     auth=auth,
-                    params={"fields": f"summary,status,assignee,parent,issuetype,subtasks,{settings.JIRA_STORY_POINTS_FIELD}", "maxResults": 200},
-                    timeout=30,
+                    params={"name": board_query},
+                    timeout=15,
                 )
-                if iss_res.status_code == 200:
-                    issues_raw = iss_res.json().get("issues", [])
-                    sprint_name = target_info.get("sprint_name") or f"Sprint {resolved_sprint_id}"
-                    root_summary = f"{target_info.get('title', 'Sprint')} - {sprint_name}"
+                if b_res.status_code == 200:
+                    boards = b_res.json().get("values", [])
+                    scrum_board = next((b for b in boards if b.get("type") == "scrum"), boards[0] if boards else None)
+                    if scrum_board:
+                        board_id = scrum_board.get("id")
+                        # Query active sprint for this board dynamically
+                        sp_res = requests.get(
+                            f"{base_jira_url}/rest/agile/1.0/board/{board_id}/sprint?state=active",
+                            headers=headers,
+                            auth=auth,
+                            timeout=15,
+                        )
+                        if sp_res.status_code == 200:
+                            sprints = sp_res.json().get("values", [])
+                            if sprints:
+                                active_sprint = sprints[0]
+                                sprint_id = active_sprint.get("id")
+                                sprint_name = active_sprint.get("name")
+                                root_summary = f"Dashboard Korporasi 1 - {sprint_name}"
+                                
+                                # Fetch all issues directly from the active sprint
+                                iss_res = requests.get(
+                                    f"{base_jira_url}/rest/agile/1.0/sprint/{sprint_id}/issue",
+                                    headers=headers,
+                                    auth=auth,
+                                    params={"fields": f"summary,status,assignee,parent,issuetype,{settings.JIRA_STORY_POINTS_FIELD}", "maxResults": 200},
+                                    timeout=30,
+                                )
+                                if iss_res.status_code == 200:
+                                    issues_raw = iss_res.json().get("issues", [])
             except Exception as e:
-                print(f"Warning: Fetching issues by sprint ID {resolved_sprint_id} failed: {e}")
-
-        elif resolved_board_id or is_dashboard or target_type == "board":
-            board_id = resolved_board_id
-            if not board_id and is_dashboard:
-                board_search_name = target_info.get("title") or root_key
-                try:
-                    b_res = requests.get(
-                        f"{base_jira_url}/rest/agile/1.0/board",
-                        headers=headers,
-                        auth=auth,
-                        params={"name": board_search_name},
-                        timeout=15,
-                    )
-                    if b_res.status_code == 200:
-                        boards = b_res.json().get("values", [])
-                        scrum_board = next((b for b in boards if b.get("type") == "scrum"), boards[0] if boards else None)
-                        if scrum_board:
-                            board_id = scrum_board.get("id")
-                except Exception as e:
-                    print(f"Warning: Board search by name '{board_search_name}' failed: {e}")
-
-            if board_id:
-                try:
-                    sp_res = requests.get(
-                        f"{base_jira_url}/rest/agile/1.0/board/{board_id}/sprint?state=active",
-                        headers=headers,
-                        auth=auth,
-                        timeout=15,
-                    )
-                    if sp_res.status_code == 200:
-                        sprints = sp_res.json().get("values", [])
-                        if sprints:
-                            active_sprint = sprints[0]
-                            sprint_id = active_sprint.get("id")
-                            sprint_name = active_sprint.get("name")
-                            target_info["sprint_id"] = sprint_id
-                            target_info["board_id"] = board_id
-                            root_summary = f"{target_info.get('title', 'Board')} - {sprint_name}"
-                            
-                            iss_res = requests.get(
-                                f"{base_jira_url}/rest/agile/1.0/sprint/{sprint_id}/issue",
-                                headers=headers,
-                                auth=auth,
-                                params={"fields": f"summary,status,assignee,parent,issuetype,subtasks,{settings.JIRA_STORY_POINTS_FIELD}", "maxResults": 200},
-                                timeout=30,
-                            )
-                            if iss_res.status_code == 200:
-                                issues_raw = iss_res.json().get("issues", [])
-                except Exception as e:
-                    print(f"Warning: Dynamic Agile Sprint fetch for board {board_id} failed: {e}")
-
-        # If Filter IDs were found in Dashboard gadgets (e.g. Filter Results Gadget)
-        if not issues_raw and (target_info.get("filter_ids") or (target_type == "filter" and target_info.get("jql"))):
-            filter_ids = target_info.get("filter_ids", [])
-            if target_type == "filter" and target_info.get("id"):
-                filter_ids = [target_info["id"]]
-
-            for fid in filter_ids:
-                try:
-                    f_res = requests.get(f"{base_jira_url}/rest/api/2/filter/{fid}", headers=headers, auth=auth, timeout=8)
-                    if f_res.status_code == 200:
-                        f_data = f_res.json()
-                        filter_jql = f_data.get("jql")
-                        if filter_jql:
-                            fields_to_fetch = f"summary,status,assignee,parent,issuetype,{settings.JIRA_STORY_POINTS_FIELD}"
-                            search_url = f"{base_jira_url}/rest/api/{api_ver}/search" if self._is_cloud() else f"{base_jira_url}/rest/api/2/search"
-                            res = requests.get(
-                                search_url,
-                                headers=headers,
-                                auth=auth,
-                                params={"jql": filter_jql, "fields": fields_to_fetch, "maxResults": 250},
-                                timeout=45,
-                            )
-                            if res.status_code == 200:
-                                issues_raw = res.json().get("issues", [])
-                                if issues_raw:
-                                    root_summary = f"{target_info.get('title', 'Dashboard')} - Filter: {f_data.get('name')}"
-                                    break
-                except Exception as e:
-                    print(f"Warning: Fetching issues by filter {fid} failed: {e}")
+                print(f"Warning: Dynamic Agile Sprint fetch failed: {e}")
 
         # Fallback to JQL Search API if issues_raw not populated by Agile API
         if not issues_raw:
             fields_to_fetch = f"summary,status,assignee,parent,issuetype,{settings.JIRA_STORY_POINTS_FIELD}"
             if is_dashboard:
-                # Scope to dashboard title if it contains project/board identifier
-                dash_clean_title = re.sub(r'[^\w\s-]', '', target_info.get("title", "")).strip()
-                if dash_clean_title and dash_clean_title.lower() not in ("dashboard", f"dashboard {root_key}"):
-                    jql = f'(project = "{dash_clean_title}" OR summary ~ "{dash_clean_title}") AND sprint in openSprints() AND issuetype in subTaskIssueTypes() ORDER BY assignee ASC, status ASC'
-                else:
-                    jql = 'sprint in openSprints() AND issuetype in subTaskIssueTypes() ORDER BY assignee ASC, status ASC'
+                jql = 'sprint in openSprints() AND issuetype in subTaskIssueTypes() ORDER BY assignee ASC, status ASC'
             elif is_project_level:
-                fields_list = ["summary", "status", "assignee", "parent", "issuetype", settings.JIRA_STORY_POINTS_FIELD]
-                # 1. Prioritize active sprint in this project
-                jql = f'project = "{root_key}" AND sprint in openSprints() ORDER BY parent ASC, created DESC'
-                issues_raw = self._execute_jql_search(jql, fields_list, max_results=250)
-
-                # 2. If no open sprint issues found, query all subtasks
-                if not issues_raw:
-                    jql = f'project = "{root_key}" AND issuetype in subTaskIssueTypes() ORDER BY parent ASC'
-                    issues_raw = self._execute_jql_search(jql, fields_list, max_results=250)
-
-                # 3. Fallback to all project issues
-                if not issues_raw:
-                    jql = f'project = "{root_key}" ORDER BY created DESC'
-                    issues_raw = self._execute_jql_search(jql, fields_list, max_results=250)
-
-                root_summary = f"Seluruh Subtask & Sprint Project {root_key}"
+                jql = f'project = "{root_key}" AND issuetype in subTaskIssueTypes() ORDER BY parent ASC'
+                root_summary = f"Seluruh Subtask & Epic Sprint Project {root_key}"
             else:
                 jql = f'parent = "{root_key}" OR "Epic Link" = "{root_key}" OR id = "{root_key}" ORDER BY parent ASC'
                 root_summary = root_key
-                fields_list = ["summary", "status", "assignee", "parent", "issuetype", settings.JIRA_STORY_POINTS_FIELD]
-                issues_raw = self._execute_jql_search(jql, fields_list, max_results=250)
+
+            search_url = f"{base_jira_url}/rest/api/{api_ver}/search/jql" if self._is_cloud() else f"{base_jira_url}/rest/api/2/search"
+            try:
+                res = requests.get(
+                    search_url,
+                    headers=headers,
+                    auth=auth,
+                    params={"jql": jql, "fields": fields_to_fetch, "maxResults": 250},
+                    timeout=45,
+                )
+                if res.status_code == 200:
+                    issues_raw = res.json().get("issues", [])
+            except Exception as e:
+                print(f"Warning: JQL search failed: {e}")
 
         # Fallback if single issue passed and JQL didn't catch subtasks directly
         if not issues_raw and not is_project_level:
@@ -816,60 +541,6 @@ class JiraRestClient(IJiraClient):
             except Exception:
                 pass
 
-        # Helper for subtask role inference
-        def _infer_task_role(summary_str: str) -> str:
-            s = summary_str.strip().lower()
-            # 1. Prefix checks MUST ALWAYS TAKE PRECEDENCE!
-            if re.search(r'^(?:\[\s*fe\s*\]|\[\s*frontend\s*\]|\[\s*web\s*\]|fe\s*[-:]|web\s*[-:]|frontend\s*[-:])', s):
-                return "Frontend"
-            if re.search(r'^(?:\[\s*be\s*\]|\[\s*backend\s*\]|\[\s*job\s*\]|\[\s*las\s*\]|be\s*[-:]|backend\s*[-:]|api\s*[-:])', s):
-                return "Backend"
-            if re.search(r'^(?:\[\s*mobile\s*\]|\[\s*android\s*\]|\[\s*ios\s*\]|mobile\s*[-:]|android\s*[-:]|ios\s*[-:])', s):
-                return "Mobile"
-            if re.search(r'^(?:\[\s*sad\s*\]|sad\s*[-:]|system design\s*[-:]|dokumen\s*[-:])', s):
-                return "SAD"
-            if re.search(r'^(?:\[\s*qa\s*\]|\[\s*qc\s*\]|\[\s*test\s*\]|qa\s*[-:]|qc\s*[-:]|test\s*[-:]|testing\s*[-:])', s):
-                return "QA"
-
-            # 2. SAD / System Design / Documentation keyword check
-            if re.search(r'\b(system design|design system|dokumen utama|product backlog|iad|bmc|sprint plan|service dependency|security review|summary design|risk register|risk management|user manual|user sign-off|architecture|it control checklist|sprint retrospective|dokumen pengembangan|fsd|brd)\b', s):
-                return "SAD"
-
-            # 3. Keyword checks
-            if re.search(r'\b(frontend|react|vue|angular|css|html|layout|modal|navbar|sidebar|screen|figma|ui/ux|view|page|halaman|tampilan)\b', s):
-                return "Frontend"
-            if re.search(r'\b(qa|qc|sit|uat|dast|sast|pentest|testing|test requirement|test plan|test case)\b', s):
-                return "QA"
-            if re.search(r'\b(mobile|android|ios|apk|flutter|react native|msc|mcs)\b', s):
-                return "Mobile"
-            if re.search(r'\b(backend|api|endpoint|database|query|service|controller|model|repository|cron|job|kafka|redis|sql|table)\b', s):
-                return "Backend"
-            return "Backend"
-
-        # Pre-pass: calculate predominant role per assignee
-        assignee_role_counts = {}
-        for item in issues_raw:
-            f = item.get("fields", {})
-            assignee_obj = f.get("assignee") or {}
-            assignee_name = assignee_obj.get("displayName") or "Unassigned"
-            if assignee_name != "Unassigned":
-                st_summary = f.get("summary", "")
-                r_inferred = _infer_task_role(st_summary)
-                if assignee_name not in assignee_role_counts:
-                    assignee_role_counts[assignee_name] = {}
-                assignee_role_counts[assignee_name][r_inferred] = assignee_role_counts[assignee_name].get(r_inferred, 0) + 1
-
-        developer_final_roles = {}
-        for dev_name, counts in assignee_role_counts.items():
-            dev_lower = dev_name.strip().lower()
-            if "fridolin" in dev_lower or "adenito" in dev_lower:
-                developer_final_roles[dev_name] = "SAD"
-            elif dev_lower in emp_role_map:
-                developer_final_roles[dev_name] = emp_role_map[dev_lower]
-            else:
-                best_role = max(counts.items(), key=lambda x: x[1])[0]
-                developer_final_roles[dev_name] = best_role
-
         member_map = {}
         story_map = {}
         detailed_subtasks = []
@@ -878,133 +549,45 @@ class JiraRestClient(IJiraClient):
         total_in_progress = 0
         total_done = 0
 
-        # Expand issues_raw to include real child subtasks under parent Stories/Tasks
-        expanded_issues = []
+        # 2. Process all retrieved subtasks
         for item in issues_raw:
-            itype_obj = item.get("fields", {}).get("issuetype") or {}
-            is_sub = itype_obj.get("subtask", False)
-            if is_sub:
-                expanded_issues.append(item)
-            else:
-                p_key = item.get("key", "")
-                p_sum = item.get("fields", {}).get("summary", "")
-                p_assignee = (item.get("fields", {}).get("assignee") or {}).get("displayName", "Unassigned")
-                epic_obj = item.get("fields", {}).get("parent") or {}
-                epic_key = epic_obj.get("key", "")
-                epic_summary = epic_obj.get("fields", {}).get("summary", "")
+            st_key = item.get("key", "")
+            f = item.get("fields", {})
+            st_summary = f.get("summary", "")
 
-                if p_key and p_key not in story_map:
-                    story_map[p_key] = {
-                        "key": p_key,
-                        "summary": p_sum,
-                        "owner": p_assignee if p_assignee != "Unassigned" else "-",
-                        "todo": 0,
-                        "in_progress": 0,
-                        "done": 0,
-                        "total_subtasks": 0,
-                    }
-                child_subs = item.get("fields", {}).get("subtasks", [])
-                if child_subs:
-                    for sub_item in child_subs:
-                        if "fields" not in sub_item:
-                            sub_item["fields"] = {}
-                        if "parent" not in sub_item["fields"]:
-                            sub_item["fields"]["parent"] = {"key": p_key, "fields": {"summary": p_sum}}
-                        sub_item["fields"]["epic"] = {"key": epic_key, "summary": epic_summary}
-                        if "issuetype" not in sub_item["fields"]:
-                            sub_item["fields"]["issuetype"] = {"subtask": True, "name": "Sub-task"}
-                        expanded_issues.append(sub_item)
-                else:
-                    item_copy = dict(item)
-                    if "fields" not in item_copy:
-                        item_copy["fields"] = {}
-                    item_copy["fields"]["epic"] = {"key": epic_key, "summary": epic_summary}
-                    item_copy["fields"]["parent"] = {"key": p_key, "fields": {"summary": p_sum}}
-                    item_copy["fields"]["issuetype"] = {"subtask": True, "name": "Story"}
-                    item_copy["is_direct_story"] = True
-                    expanded_issues.append(item_copy)
-
-        # Batch enrich subtask details (assignee, status, etc.) via JQL search
-        sub_keys_to_fetch = [s.get("key") for s in expanded_issues if s.get("key") and ("assignee" not in s.get("fields", {}))]
-        if sub_keys_to_fetch:
-            subtask_data_map = {}
-            chunk_size = 50
-            for i in range(0, len(sub_keys_to_fetch), chunk_size):
-                chunk = sub_keys_to_fetch[i : i + chunk_size]
-                jql_query = f"issueKey in ({','.join(chunk)})"
-                try:
-                    s_res = requests.get(
-                        f"{base_jira_url}/rest/api/2/search",
-                        headers=headers,
-                        auth=auth,
-                        params={"jql": jql_query, "fields": f"summary,status,assignee,parent,issuetype,{settings.JIRA_STORY_POINTS_FIELD}", "maxResults": chunk_size},
-                        timeout=20,
-                    )
-                    if s_res.status_code == 200:
-                        for s_iss in s_res.json().get("issues", []):
-                            subtask_data_map[s_iss.get("key")] = s_iss
-                except Exception as e:
-                    print(f"Warning: Batch subtask fetch error: {e}")
-
-            for s_item in expanded_issues:
-                s_key = s_item.get("key")
-                if s_key in subtask_data_map:
-                    enriched_fields = subtask_data_map[s_key].get("fields", {})
-                    orig_epic = s_item.get("fields", {}).get("epic")
-                    orig_parent = s_item.get("fields", {}).get("parent")
-                    s_item["fields"].update(enriched_fields)
-                    if orig_epic:
-                        s_item["fields"]["epic"] = orig_epic
-                    if orig_parent and "parent" not in s_item["fields"]:
-                        s_item["fields"]["parent"] = orig_parent
-
-        target_items_to_process = expanded_issues if expanded_issues else issues_raw
-
-        # 2. Process all retrieved issues & subtasks
-        for item in target_items_to_process:
-            issue_key = item.get("key", "")
-            fields = item.get("fields", {})
-            issue_summary = fields.get("summary", "")
-            issue_type_obj = fields.get("issuetype") or {}
-            is_subtask = issue_type_obj.get("subtask", False) or bool(fields.get("parent"))
-
-            # Assignee
-            assignee_obj = fields.get("assignee") or {}
-            assignee_name = assignee_obj.get("displayName") or "Unassigned"
+            # Parent issue info
+            parent_obj = f.get("parent") or {}
+            p_key = parent_obj.get("key") or root_key
+            p_fields = parent_obj.get("fields") or {}
+            p_summary = p_fields.get("summary") or p_key
 
             # Status
-            status_obj = fields.get("status") or {}
-            status_name = status_obj.get("name", "To Do")
-            status_cat_key = (status_obj.get("statusCategory") or {}).get("key", "")
-            normalized_status = _categorize_status(status_name, status_cat_key)
+            st_status_obj = f.get("status") or {}
+            st_status_name = st_status_obj.get("name", "To Do")
+            st_status_cat = (st_status_obj.get("statusCategory") or {}).get("key", "")
+            normalized_status = _categorize_status(st_status_name, st_status_cat)
 
-            # Role lookup: Developer overall role -> fallback task inference
-            if assignee_name == "Unassigned":
-                resolved_role = "-"
-            elif "fridolin" in assignee_name.strip().lower() or "adenito" in assignee_name.strip().lower():
-                resolved_role = "SAD"
-            else:
-                task_role = _infer_task_role(issue_summary)
-                if task_role == "SAD":
-                    resolved_role = "SAD"
+            # Assignee
+            assignee_obj = f.get("assignee") or {}
+            assignee_name = assignee_obj.get("displayName") or "Unassigned"
+
+            # Story Points
+            st_sp = self._extract_story_points(f)
+
+            # Role lookup / inference
+            role_val = emp_role_map.get(assignee_name.strip().lower(), "")
+            if not role_val:
+                sum_lower = st_summary.lower()
+                if sum_lower.startswith("web -") or sum_lower.startswith("fe -"):
+                    role_val = "Frontend"
+                elif sum_lower.startswith("be -"):
+                    role_val = "Backend"
+                elif sum_lower.startswith("mobile -"):
+                    role_val = "Mobile"
                 else:
-                    resolved_role = developer_final_roles.get(assignee_name) or task_role
+                    role_val = "Engineer"
 
-            if not is_subtask:
-                # Parent Story / Epic in the sprint
-                if issue_key not in story_map:
-                    story_map[issue_key] = {
-                        "key": issue_key,
-                        "summary": issue_summary,
-                        "owner": assignee_name if assignee_name != "Unassigned" else "-",
-                        "todo": 0,
-                        "in_progress": 0,
-                        "done": 0,
-                        "total_subtasks": 0,
-                    }
-                continue
-
-            # It's a subtask
+            # Update overall counts
             if normalized_status == "Done":
                 total_done += 1
             elif normalized_status == "In Progress":
@@ -1012,117 +595,82 @@ class JiraRestClient(IJiraClient):
             else:
                 total_todo += 1
 
-            # Parent tracking
-            parent_key = (fields.get("parent") or {}).get("key", "")
-            parent_summary = (fields.get("parent") or {}).get("fields", {}).get("summary", "")
-            epic_key = (fields.get("epic") or {}).get("key", "")
-            epic_summary = (fields.get("epic") or {}).get("summary", "")
-
-            if parent_key and parent_key not in story_map:
-                story_map[parent_key] = {
-                    "key": parent_key,
-                    "summary": parent_summary or f"Parent {parent_key}",
-                    "owner": "-",
+            # Update Story Map
+            if p_key not in story_map:
+                story_map[p_key] = {
+                    "key": p_key,
+                    "summary": p_summary,
                     "todo": 0,
                     "in_progress": 0,
                     "done": 0,
                     "total_subtasks": 0,
+                    "total_sp": 0.0,
                 }
-            if parent_key in story_map:
-                story_map[parent_key]["total_subtasks"] += 1
-                if normalized_status == "Done":
-                    story_map[parent_key]["done"] += 1
-                elif normalized_status == "In Progress":
-                    story_map[parent_key]["in_progress"] += 1
-                else:
-                    story_map[parent_key]["todo"] += 1
-
-            # Member progress tracking
-            member_key = assignee_name if assignee_name != "Unassigned" else "Belum Diambil (Unassigned)"
-            if member_key not in member_map:
-                member_map[member_key] = {
-                    "name": member_key,
-                    "role": "-" if member_key == "Belum Diambil (Unassigned)" else developer_final_roles.get(assignee_name, resolved_role),
-                    "todo": 0,
-                    "in_progress": 0,
-                    "done": 0,
-                    "total_subtasks": 0,
-                    "is_unassigned": member_key == "Belum Diambil (Unassigned)",
-                }
-            member_map[member_key]["total_subtasks"] += 1
+            story_map[p_key]["total_subtasks"] += 1
             if normalized_status == "Done":
-                member_map[member_key]["done"] += 1
+                story_map[p_key]["done"] += 1
             elif normalized_status == "In Progress":
-                member_map[member_key]["in_progress"] += 1
+                story_map[p_key]["in_progress"] += 1
             else:
-                member_map[member_key]["todo"] += 1
+                story_map[p_key]["todo"] += 1
 
-            # Detailed subtask entry
+            # Update Member Map
+            if assignee_name not in member_map:
+                member_map[assignee_name] = {
+                    "name": assignee_name,
+                    "role": role_val,
+                    "todo": 0,
+                    "in_progress": 0,
+                    "done": 0,
+                    "total_subtasks": 0,
+                }
+            member_map[assignee_name]["total_subtasks"] += 1
+    
+            if normalized_status == "Done":
+                member_map[assignee_name]["done"] += 1
+            elif normalized_status == "In Progress":
+                member_map[assignee_name]["in_progress"] += 1
+            else:
+                member_map[assignee_name]["todo"] += 1
+
             detailed_subtasks.append({
-                "key": issue_key,
-                "summary": issue_summary,
+                "key": st_key,
+                "summary": st_summary,
+                "parent_key": p_key,
+                "parent_summary": p_summary,
                 "assignee": assignee_name,
-                "role": resolved_role,
-                "status": normalized_status,
-                "parent_key": parent_key,
-                "parent_summary": parent_summary,
-                "epic_key": epic_key,
-                "epic_summary": epic_summary,
-                "is_direct_story": item.get("is_direct_story", False),
-                "story_points": 1.0,
-                "url": f"{base_jira_url}/browse/{issue_key}",
+                "role": role_val,
+                "status": st_status_name,
+                "status_category": normalized_status,
+                "story_points": st_sp,
+                "url": f"{base_jira_url}/browse/{st_key}" if st_key else "",
             })
 
-        # If no subtasks exist under sprint items, treat all sprint stories/tasks as reportable work items
-        if not detailed_subtasks and issues_raw:
-            for item in issues_raw:
-                issue_key = item.get("key", "")
-                fields = item.get("fields", {})
-                issue_summary = fields.get("summary", "")
-                assignee_obj = fields.get("assignee") or {}
-                assignee_name = assignee_obj.get("displayName") or "Unassigned"
-                status_obj = fields.get("status") or {}
-                status_name = status_obj.get("name", "To Do")
-                status_cat_key = (status_obj.get("statusCategory") or {}).get("key", "")
-                normalized_status = _categorize_status(status_name, status_cat_key)
+        # Ensure all active team members from Members.xlsx appear (only in project mode, not dashboard mode)
+        if active_employees and not is_dashboard:
+            for emp in active_employees:
+                name = getattr(emp, "name", None) or (emp.get("name") if isinstance(emp, dict) else "")
+                role = getattr(emp, "role", None) or (emp.get("role") if isinstance(emp, dict) else "")
+                if name and name not in member_map:
+                    member_map[name] = {
+                        "name": name,
+                        "role": role,
+                        "todo": 0,
+                        "in_progress": 0,
+                        "done": 0,
+                        "total_subtasks": 0,
+                        "total_sp": 0.0,
+                    }
 
-                if assignee_name == "Unassigned":
-                    resolved_role = "-"
-                elif "fridolin" in assignee_name.strip().lower() or "adenito" in assignee_name.strip().lower():
-                    resolved_role = "SAD"
-                else:
-                    task_role = _infer_task_role(issue_summary)
-                    resolved_role = developer_final_roles.get(assignee_name) or task_role
-
-                if normalized_status == "Done":
-                    total_done += 1
-                elif normalized_status == "In Progress":
-                    total_in_progress += 1
-                else:
-                    total_todo += 1
-
-                detailed_subtasks.append({
-                    "key": issue_key,
-                    "summary": issue_summary,
-                    "assignee": assignee_name,
-                    "role": resolved_role,
-                    "status": normalized_status,
-                    "parent_key": "-",
-                    "parent_summary": "-",
-                    "story_points": 1.0,
-                    "url": f"{base_jira_url}/browse/{issue_key}",
-                })
-
-        # Calculate percent done per member (only include members who actually have tasks in Jira result)
+        # Calculate percent done per member
         member_progress_list = []
         for m in member_map.values():
             tot = m["total_subtasks"]
-            if tot > 0:
-                m["percent_done"] = round((m["done"] / tot * 100), 1)
-                member_progress_list.append(m)
+            m["percent_done"] = round((m["done"] / tot * 100), 1) if tot > 0 else 0.0
+            member_progress_list.append(m)
 
-        # Sort members by total tasks count (descending) then name
-        member_progress_list.sort(key=lambda x: (x["total_subtasks"], x["name"]), reverse=True)
+        # Sort members by role then name
+        member_progress_list.sort(key=lambda x: (x["role"], x["name"]))
 
         # Calculate percent done per story
         story_progress_list = []
@@ -1133,12 +681,10 @@ class JiraRestClient(IJiraClient):
         story_progress_list.sort(key=lambda x: x["key"])
 
         grand_total = total_todo + total_in_progress + total_done
-        sprint_info = self.get_active_sprint_info(root_key, target_info=target_info)
 
         return {
             "root_key": root_key,
             "root_summary": root_summary,
-            "sprint_info": sprint_info,
             "total_epics_count": len(story_progress_list),
             "overall_status": {
                 "todo": total_todo,
@@ -1152,139 +698,85 @@ class JiraRestClient(IJiraClient):
             "detailed_subtasks": detailed_subtasks,
         }
 
-    def get_active_sprint_info(
-        self, project_or_epic: str = "JT", target_info: Optional[Dict[str, Any]] = None
-    ) -> Optional[Dict[str, Any]]:
+    def get_active_sprint_info(self, project_or_epic: str = "JT") -> Optional[Dict[str, Any]]:
         """
         Fetches the active Sprint details (Name, Start Date, End Date, Days Remaining)
-        100% dynamically from Jira Agile REST API and Jira Greenhopper API.
+        directly from Jira Agile REST API.
         """
-        if not target_info:
-            target_info = self._resolve_target_info(project_or_epic)
-
+        import datetime
+        project_key = project_or_epic.split("-")[0] if "-" in project_or_epic else project_or_epic
         auth = self._get_auth()
         headers = self._get_headers()
-        base_jira_url = self._get_base_url()
+        base_url = settings.JIRA_URL.rstrip("/")
 
-        candidate_board_ids = []
-        if target_info.get("board_id"):
-            candidate_board_ids.append(target_info["board_id"])
+        # 1. Search Agile Boards for the project
+        try:
+            boards_url = f"{base_url}/rest/agile/1.0/board?projectKeyOrId={project_key}"
+            res = requests.get(boards_url, headers=headers, auth=auth, timeout=10)
+            if res.status_code == 200:
+                boards = res.json().get("values", [])
+                for b in boards:
+                    b_id = b.get("id")
+                    sprint_url = f"{base_url}/rest/agile/1.0/board/{b_id}/sprint?state=active"
+                    s_res = requests.get(sprint_url, headers=headers, auth=auth, timeout=10)
+                    if s_res.status_code == 200:
+                        active_sprints = s_res.json().get("values", [])
+                        if active_sprints:
+                            sp = active_sprints[0]
+                            name = sp.get("name", "Active Sprint")
+                            end_date_str = sp.get("endDate")
+                            days_remaining = None
+                            if end_date_str:
+                                try:
+                                    end_dt = datetime.datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+                                    now_dt = datetime.datetime.now(datetime.timezone.utc)
+                                    days_remaining = (end_dt.date() - now_dt.date()).days
+                                except Exception:
+                                    pass
+                            return {
+                                "sprint_id": sp.get("id"),
+                                "name": name,
+                                "start_date": sp.get("startDate"),
+                                "end_date": end_date_str,
+                                "days_remaining": days_remaining,
+                                "goal": sp.get("goal", ""),
+                            }
+        except Exception:
+            pass
 
-        # If direct sprint ID is known
-        if target_info.get("sprint_id"):
-            try:
-                sp_url = f"{base_jira_url}/rest/agile/1.0/sprint/{target_info['sprint_id']}"
-                sp_res = requests.get(sp_url, headers=headers, auth=auth, timeout=10)
-                if sp_res.status_code == 200:
-                    sp = sp_res.json()
-                    name = sp.get("name", "Active Sprint")
-                    end_date_str = sp.get("endDate")
-                    days_remaining = None
-                    if end_date_str:
-                        try:
-                            end_dt = datetime.datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
-                            now_dt = datetime.datetime.now(datetime.timezone.utc)
-                            curr = now_dt.date()
-                            target = end_dt.date()
-                            w_days = 0
-                            while curr < target:
-                                curr += datetime.timedelta(days=1)
-                                if curr.weekday() < 5:
-                                    w_days += 1
-                            days_remaining = w_days
-                        except Exception:
-                            pass
-                    return {
-                        "sprint_id": sp.get("id"),
-                        "name": name,
-                        "start_date": sp.get("startDate"),
-                        "end_date": end_date_str,
-                        "days_remaining": days_remaining,
-                        "goal": sp.get("goal", ""),
-                    }
-            except Exception:
-                pass
-
-        # If board ID not directly known, search boards dynamically
-        if not candidate_board_ids:
-            search_params = {}
-            if target_info.get("type") == "dashboard":
-                search_params = {"name": target_info.get("title") or project_or_epic}
-            elif target_info.get("type") == "project":
-                search_params = {"projectKeyOrId": target_info.get("key") or project_or_epic}
-            elif "-" in project_or_epic:
-                search_params = {"projectKeyOrId": project_or_epic.split("-")[0]}
-
-            try:
-                res = requests.get(f"{base_jira_url}/rest/agile/1.0/board", headers=headers, auth=auth, params=search_params, timeout=10)
-                if res.status_code == 200:
-                    boards = res.json().get("values", [])
-                    scrum_boards = [b for b in boards if b.get("type") == "scrum"] or boards
-                    for b in scrum_boards:
-                        if b.get("id") not in candidate_board_ids:
-                            candidate_board_ids.append(b.get("id"))
-            except Exception:
-                pass
-
-        # Query active sprint and greenhopper data for candidate boards
-        for b_id in candidate_board_ids:
-            # 1. Direct native fetch from Jira Greenhopper API (Exact Jira Days Remaining)
-            try:
-                gh_res = requests.get(
-                    f"{base_jira_url}/rest/greenhopper/1.0/xboard/work/allData/?rapidViewId={b_id}",
-                    headers=headers,
-                    auth=auth,
-                    timeout=12,
-                )
-                if gh_res.status_code == 200:
-                    s_list = gh_res.json().get("sprintsData", {}).get("sprints", [])
-                    active_gh = next((s for s in s_list if s.get("state") == "ACTIVE"), None)
-                    if active_gh:
-                        return {
-                            "sprint_id": active_gh.get("id"),
-                            "name": active_gh.get("name", "Active Sprint"),
-                            "start_date": active_gh.get("startDate"),
-                            "end_date": active_gh.get("endDate"),
-                            "days_remaining": active_gh.get("daysRemaining"),
-                            "goal": active_gh.get("goal", ""),
-                        }
-            except Exception:
-                pass
-
-            # 2. Fallback to standard Agile Sprint API
-            try:
-                sprint_url = f"{base_jira_url}/rest/agile/1.0/board/{b_id}/sprint?state=active"
-                s_res = requests.get(sprint_url, headers=headers, auth=auth, timeout=10)
-                if s_res.status_code == 200:
-                    active_sprints = s_res.json().get("values", [])
-                    if active_sprints:
-                        sp = active_sprints[0]
-                        name = sp.get("name", "Active Sprint")
-                        end_date_str = sp.get("endDate")
-                        days_remaining = None
-                        if end_date_str:
-                            try:
-                                end_dt = datetime.datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
-                                now_dt = datetime.datetime.now(datetime.timezone.utc)
-                                curr = now_dt.date()
-                                target = end_dt.date()
-                                w_days = 0
-                                while curr < target:
-                                    curr += datetime.timedelta(days=1)
-                                    if curr.weekday() < 5:
-                                        w_days += 1
-                                days_remaining = w_days
-                            except Exception:
-                                pass
-                        return {
-                            "sprint_id": sp.get("id"),
-                            "name": name,
-                            "start_date": sp.get("startDate"),
-                            "end_date": end_date_str,
-                            "days_remaining": days_remaining,
-                            "goal": sp.get("goal", ""),
-                        }
-            except Exception:
-                pass
+        # 2. Fallback: Search across all agile boards in Jira
+        try:
+            boards_url = f"{base_url}/rest/agile/1.0/board"
+            res = requests.get(boards_url, headers=headers, auth=auth, timeout=10)
+            if res.status_code == 200:
+                boards = res.json().get("values", [])
+                for b in boards:
+                    b_id = b.get("id")
+                    sprint_url = f"{base_url}/rest/agile/1.0/board/{b_id}/sprint?state=active"
+                    s_res = requests.get(sprint_url, headers=headers, auth=auth, timeout=10)
+                    if s_res.status_code == 200:
+                        active_sprints = s_res.json().get("values", [])
+                        if active_sprints:
+                            sp = active_sprints[0]
+                            name = sp.get("name", "Active Sprint")
+                            end_date_str = sp.get("endDate")
+                            days_remaining = None
+                            if end_date_str:
+                                try:
+                                    end_dt = datetime.datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+                                    now_dt = datetime.datetime.now(datetime.timezone.utc)
+                                    days_remaining = (end_dt.date() - now_dt.date()).days
+                                except Exception:
+                                    pass
+                            return {
+                                "sprint_id": sp.get("id"),
+                                "name": name,
+                                "start_date": sp.get("startDate"),
+                                "end_date": end_date_str,
+                                "days_remaining": days_remaining,
+                                "goal": sp.get("goal", ""),
+                            }
+        except Exception:
+            pass
 
         return None

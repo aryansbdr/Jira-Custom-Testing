@@ -35,3 +35,7 @@ temp/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Photobooth Standalone Projects
+photobooth/
+photobooth-react/

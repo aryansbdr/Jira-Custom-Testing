@@ -11,7 +11,7 @@ class Subtask:
         summary: str,
         description: str,
         role: str,
-        story_points: float,
+        story_points: float = 1.0,
         parent_key: Optional[str] = None,
         parent_summary: Optional[str] = None,
         parent_type: Optional[str] = None,

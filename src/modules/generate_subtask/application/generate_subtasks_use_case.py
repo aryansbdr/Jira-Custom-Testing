@@ -169,17 +169,19 @@ class GenerateSubtasksUseCase:
                     summary=f"Design Security Review - {clean_title}",
                     description=f"Eksekusi Design Security Review untuk {clean_title}",
                     role="backend",
+                    story_points=1.0,
                 ),
                 Subtask(
                     summary=f"Code Review - {clean_title}",
                     description=f"Eksekusi Code Review & Static Analysis untuk {clean_title}",
                     role="backend",
-
+                    story_points=1.0,
                 ),
                 Subtask(
                     summary=testing_subtask_title,
                     description=testing_desc,
                     role="backend",
+                    story_points=1.0,
                 )
             ]
 
@@ -264,11 +266,29 @@ class GenerateSubtasksUseCase:
 
         if top_match and is_plek_ketiplek_match:
             combined_text = f"{summary}\n{description or ''}".lower()
-            has_web_or_corp = any(kw in combined_text for kw in ["korporasi", "mab", "web", "portal", "dashboard", "fe ", " fe", "ui", "tab ", "halaman", "browser"])
-            has_mobile_keyword = any(kw in combined_text for kw in ["mobile", "brispot", "android", "ios", "mantri", "aplikasi mobile", "mobile app", "hanya untuk mobile", "untuk mobile", "camera brispot", "galeri brispot", "ots"])
-            is_mobile_story = has_mobile_keyword and not has_web_or_corp
+            has_explicit_web = bool(re.search(
+                r'\b(korporasi|mab|web\s*:|web\b|fe\s*:|portal web|web portal|dashboard web|web dashboard|desktop browser|tabel|relationship manager|\brm\b)\b|hanya untuk web',
+                combined_text,
+                re.IGNORECASE
+            ))
+            has_explicit_mobile = bool(re.search(
+                r'\b(mobile\s*:|hanya untuk mobile|untuk mobile|aplikasi mobile|mobile app|mantri|ots pemutus|ots pemrakarsa|ots prakarsa|camera brispot|galeri brispot)\b',
+                combined_text,
+                re.IGNORECASE
+            ))
+            if has_explicit_web and not has_explicit_mobile:
+                is_mobile_story = False
+            elif has_explicit_mobile and not has_explicit_web:
+                is_mobile_story = True
+            elif has_explicit_mobile and bool(re.search(r'\b(mobile\s*:|hanya untuk mobile)\b', combined_text, re.IGNORECASE)):
+                is_mobile_story = True
+            elif has_explicit_web:
+                is_mobile_story = False
+            else:
+                is_mobile_story = False
+
             is_pemutus = is_mobile_story and "pemutus" in combined_text
-            is_pemrakarsa = is_mobile_story and ("pemrakarsa" in combined_text or "prescreening" in combined_text)
+            is_pemrakarsa = is_mobile_story and ("pemrakarsa" in combined_text or "prescreening" in combined_text or "prakarsa" in combined_text)
             is_bracket_mobile = is_pemrakarsa or is_pemutus
             role_tag = "[Mobile Pemutus]" if is_pemutus else ("[Mobile Pemrakarsa]" if is_pemrakarsa else "MOBILE -")
             msc_tag = "[MSC Pemutus]" if is_pemutus else ("[MSC Prakarsa]" if is_pemrakarsa else "MSC -")
@@ -292,24 +312,25 @@ class GenerateSubtasksUseCase:
                 # 1. Any task with /v1/, /v2/, create service, endpoint, queue, migration, database -> Backend
                 _is_backend_service = any(kw in clean_body_lower for kw in [
                     "/v1/", "/v2/", "create new service", "create service",
-                    "queue ", "migrate", "endpoint", "api ", "backend", "db schema",
-                    "migration", "repository", "controller", "stored procedure"
+                    "queue ", "migrate", "endpoint", "api", "backend", "db schema",
+                    "migration", "repository", "controller", "stored procedure", "fds",
+                    "simpan lat long", "save lat long", "send geotagging", "kirimkan pada fds",
+                    "geotagging data"
                 ])
 
                 _ui_kw = [
                     "pop up", "popup", "wording", "halaman", "redirect",
                     "button", "tombol", "screen", "layout", "tampilan",
-                    "dropdown", "autofill", "checkbox", "radio", "figma",
-                    "camera", "geotagging", "input"
+                    "dropdown", "autofill", "checkbox", "radio", "figma"
                 ]
-                is_ui_task = any(kw in clean_body_lower for kw in _ui_kw)
+                is_ui_task = any(kw in clean_body_lower for kw in _ui_kw) and not _is_backend_service
 
-                if clean_body_lower.startswith("[mobile") or clean_body_lower.startswith("mobile -"):
-                    normalized_role = "mobile" if is_mobile_story else "frontend"
+                if _is_backend_service:
+                    normalized_role = "backend"
                 elif clean_body_lower.startswith("[msc") or clean_body_lower.startswith("msc -") or clean_body_lower.startswith("[mcs") or clean_body_lower.startswith("mcs -"):
                     normalized_role = "backend"
-                elif _is_backend_service:
-                    normalized_role = "backend"
+                elif clean_body_lower.startswith("[mobile") or clean_body_lower.startswith("mobile -"):
+                    normalized_role = "mobile" if is_mobile_story else "frontend"
                 elif is_ui_task:
                     normalized_role = "mobile" if is_mobile_story else "frontend"
                 elif raw_role in ("developer", "backend", "be"):
@@ -427,14 +448,32 @@ class GenerateSubtasksUseCase:
 
         # Post-process: mobile context guard + general sanitization
         ac_text = (summary + " " + (description or "")).lower()
-        has_web_or_corp = any(kw in ac_text for kw in ["korporasi", "mab", "web", "portal", "dashboard", "fe ", " fe", "ui", "tab ", "halaman", "browser"])
-        mobile_context_keywords = [
-            "mobile", "mobile app", "brispot", "android", "ios", "aplikasi mobile", "ots", "prescreening",
-            "mantri", "hanya untuk mobile", "untuk mobile", "camera brispot", "galeri brispot"
-        ]
-        has_mobile_context = (any(kw in ac_text for kw in mobile_context_keywords) and not has_web_or_corp) or (bool(assignee_role) and "mob" in assignee_role.lower())
+        has_explicit_web = bool(re.search(
+            r'\b(korporasi|mab|web\s*:|web\b|fe\s*:|portal web|web portal|dashboard web|web dashboard|desktop browser|tabel|relationship manager|\brm\b)\b|hanya untuk web',
+            ac_text,
+            re.IGNORECASE
+        ))
+        has_explicit_mobile = bool(re.search(
+            r'\b(mobile\s*:|hanya untuk mobile|untuk mobile|aplikasi mobile|mobile app|mantri|ots pemutus|ots pemrakarsa|ots prakarsa|camera brispot|galeri brispot)\b',
+            ac_text,
+            re.IGNORECASE
+        ))
+        if has_explicit_web and not has_explicit_mobile:
+            has_mobile_context = False
+        elif has_explicit_mobile and not has_explicit_web:
+            has_mobile_context = True
+        elif has_explicit_mobile and bool(re.search(r'\b(mobile\s*:|hanya untuk mobile)\b', ac_text, re.IGNORECASE)):
+            has_mobile_context = True
+        elif has_explicit_web:
+            has_mobile_context = False
+        else:
+            has_mobile_context = False
+
+        if bool(assignee_role) and "mob" in assignee_role.lower():
+            has_mobile_context = True
+
         is_pemutus = has_mobile_context and "pemutus" in ac_text
-        is_pemrakarsa = has_mobile_context and ("pemrakarsa" in ac_text or "prescreening" in ac_text)
+        is_pemrakarsa = has_mobile_context and ("pemrakarsa" in ac_text or "prescreening" in ac_text or "prakarsa" in ac_text)
         is_bracket_mobile = is_pemrakarsa or is_pemutus
 
         filtered_subtasks = []
@@ -446,12 +485,12 @@ class GenerateSubtasksUseCase:
             if sub.role == "mobile" and not has_mobile_context:
                 continue
 
-            # In mobile stories, ensure standard prefix formatting based directly on sub.role
-            if has_mobile_context:
-                sub_sum = sub.summary.strip()
-                clean_body = re.sub(r'^((be|web|fe|webapp|mobile|msc|mcs|qa)\s*-\s*)+', '', sub_sum, flags=re.IGNORECASE).strip()
-                clean_body = re.sub(r'^\[(Mobile|WEB|FE|MSC|MCS|BE)[^\]]*\]\s*', '', clean_body, flags=re.IGNORECASE).strip()
+            # Ensure standard prefix formatting based directly on sub.role and context
+            sub_sum = sub.summary.strip()
+            clean_body = re.sub(r'^((be|web|fe|webapp|mobile|msc|mcs|qa)\s*-\s*)+', '', sub_sum, flags=re.IGNORECASE).strip()
+            clean_body = re.sub(r'^\[(Mobile|WEB|FE|MSC|MCS|BE)[^\]]*\]\s*', '', clean_body, flags=re.IGNORECASE).strip()
 
+            if has_mobile_context:
                 if sub.role == "backend":
                     if is_pemutus:
                         sub.summary = f"[MSC Pemutus] {clean_body}"
@@ -467,6 +506,12 @@ class GenerateSubtasksUseCase:
                         sub.summary = f"[Mobile Pemrakarsa] {clean_body}"
                     else:
                         sub.summary = f"MOBILE - {clean_body}"
+            else:
+                if sub.role == "backend":
+                    sub.summary = f"BE - {clean_body}"
+                else:
+                    sub.role = "frontend"
+                    sub.summary = f"WEB - {clean_body}"
 
             filtered_subtasks.append(sub)
 
