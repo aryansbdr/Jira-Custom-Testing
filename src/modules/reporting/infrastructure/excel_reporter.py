@@ -9,6 +9,16 @@ from shared.config import settings
 
 class ExcelReporter:
 
+    @staticmethod
+    def _get_professional_filename(root_key: str, report_data: dict = None) -> str:
+        if not root_key:
+            return "General_Project"
+        import re
+        raw_key = str(root_key).strip()
+        clean_key = re.sub(r'[^\w\-\.]', '_', raw_key)
+        clean_key = re.sub(r'_+', '_', clean_key).strip('_')
+        return clean_key or "Project_Report"
+
     def generate_progress_report(
         self, report_data: dict, safe_key: str, output_path: str = "Laporan"
     ) -> str:
